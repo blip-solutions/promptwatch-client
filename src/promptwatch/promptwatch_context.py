@@ -12,13 +12,15 @@ from .data_model import Session, ActivityBase,  ChainSequence, Log, Answer, Acti
 from .client import Client
 from uuid import uuid4
 import types
-
+from .utils import wrap_a_method, classproperty
+from .caching import PromptWatchCacheManager
 
 
 
 
 class PromptWatch():
     _thread_local = threading.local()
+    prompt_template_register_cache={}
 
     def __init__(self, session_id: Optional[str] = None, tracking_project: Optional[str] = None, tracking_tenant: Optional[str] = None, api_key: Optional[str] = None):
         """
@@ -56,9 +58,8 @@ class PromptWatch():
                 GREEN = '\033[32m'
                 RESET = '\033[0m'
                 print(f"{GREEN}You are using a temporary API key. Do not use in production.")
-                print(f"Visit the the detail of this session at https://app.promptwatch.io/sessions?temp-api-key={api_key} {RESET}")
+                print(f"Visit the the detail of this session at https://www.promptwatch.io/sessions?temp-api-key={api_key} {RESET}")
                 
-
 
 
         self.client = Client(api_key=api_key)
@@ -67,40 +68,33 @@ class PromptWatch():
         self.chain_hierarchy:List[ChainSequence]=[]
         self.pending_session_save=True
         self.pending_stack:List[ActivityBase]=[]
-        self.prompt_template_register_cache={}
+        
         self.current_session=None
         self.context={}
+        self._cache_manager = PromptWatchCacheManager(self)
+        self.tracing_handlers={}
 
+    @property
+    def caching(self):
+        return self._cache_manager
 
-    def use_langchain_tracing(self, langchain_callback_manager=None)->PromptWatch:
-        """ Enable langchain tracing
+    @property
+    def langchain(self):
+        if not hasattr(self,"_langchain"):
+            from .langchain.langchain_support import LangChainSupport
+            self._langchain = LangChainSupport(self)
+            
+        
+        return self._langchain
+    
 
-        Args:
-            langchain_callback_manager (langchain.callbacks.base.BaseCallbackManager, optional):  If using custom callback manager, pass it here. Otherwise, default callback manager will be used. Defaults to None.
-
-        """
-
-        from langchain.callbacks import get_callback_manager
-        from promptwatch.langchain_handler import LangChainCallbackHandler
-
-        self.langchain_callback_handler = LangChainCallbackHandler(self)
-        langchain_callback_manager = langchain_callback_manager or get_callback_manager()
-        langchain_callback_manager.add_handler(self.langchain_callback_handler)
-
-        return self
-
-    def get_langchain_callback_handler(self):
-        if not ( hasattr(self, "langchain_callback_handler") and self.langchain_callback_handler ):
-            from promptwatch.langchain_handler import LangChainCallbackHandler
-            self.langchain_callback_handler = LangChainCallbackHandler(self)
-        return self.langchain_callback_handler
 
     def __enter__(self):
         self._thread_local.active_instance = self
 
-        if not ( hasattr(self, "langchain_callback_handler") and self.langchain_callback_handler ):
+        if not self.tracing_handlers:
             # lets enable tracing by default
-            self.use_langchain_tracing()
+            self.langchain.init_tracing()
             #raise Exception("PromptWatch: LangChain callback handler is not set. Please call langchain_tracing() before entering the context.")
 
         if not self.current_session:
@@ -213,24 +207,10 @@ class PromptWatch():
         ...
 
         """
-        if not template_name:
-            raise Exception("template_name can't be empty")
-        if re.search(r"\s", template_name):
-            raise Exception("template_name can't contain white spaces")
-        if len(template_name)>126:
-            raise Exception("template_name must be less than 126 characters")
         
-        converted_template =  self.langchain_callback_handler.create_prompt_template_description(prompt_template, template_name=template_name, template_version=version)
-        from .decorators import format_prompt_decorator
-        decorator_func = format_prompt_decorator(template_name)
+        from .langchain.langchain_support import register_prompt_template
+        register_prompt_template(template_name,prompt_template, version=version)
         
-        # need to go around pydantic restrictions on __setattr__  by using __dict__ directly
-        prompt_template.__dict__["format_prompt"] =  types.MethodType(decorator_func(prompt_template.format_prompt), prompt_template)
-        # we need to mark the prompt template somehow... keeping just the reference doesn't work since pydantic is creating copy of it when passed to the constructor
-        # that is why we add special field __template_name__ into it... also skipping setattr() since that might be blocked by pydantic as well (depending on the configuration)
-        prompt_template.__dict__["__template_name__"]=template_name
-
-        self.prompt_template_register_cache[template_name] = converted_template
 
 
     def add_context(self, key:str, value:Any):
