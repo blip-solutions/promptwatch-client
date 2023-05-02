@@ -15,7 +15,7 @@ def is_primitive_type(val):
     return val.__class__.__module__=="builtins" and not type(val) is type and not type(val) is dict
 
 
-def wrap_a_method(object, function_name, decorator, **decorator_kwargs):
+def wrap_a_method(object, function_name, decorator):
       # need to go around pydantic restrictions on __setattr__  by using __dict__ directly
       original_func = getattr(object.__class__, function_name)
       object.__dict__[function_name] = types.MethodType(decorator(original_func),object)

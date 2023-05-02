@@ -12,7 +12,8 @@ from langchain.chat_models.base import BaseChatModel
 from langchain.chains import LLMChain
 from langchain.embeddings.base import Embeddings
 from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage, ChatGeneration, ChatResult
-from langchain.callbacks import BaseCallbackHandler, get_callback_manager
+from langchain.callbacks.base import BaseCallbackHandler
+
 from langchain.schema import PromptValue
 from langchain.schema import AgentAction, AgentFinish, LLMResult,  Document
 from ..client import Client
@@ -26,7 +27,7 @@ from .. import PromptWatch
 from langchain.cache import BaseCache
 from langchain.schema import Generation
 from collections import OrderedDict
-from langchain.callbacks import get_callback_manager
+
 import langchain
 
 class LangChainSupport:
@@ -42,13 +43,35 @@ class LangChainSupport:
             langchain_callback_manager (langchain.callbacks.base.BaseCallbackManager, optional):  If using custom callback manager, pass it here. Otherwise, default callback manager will be used. Defaults to None.
 
         """
+        self.langchain_callback_handler = LangChainCallbackHandler(self.promptwatch_context)
 
+        try:
+            # this will 
+            #for langchain >0.0.153
+            from langchain.callbacks.manager import _configure
+            import langchain.callbacks.manager as langchain_callback_manager_module
+            def promptwatch_callback_configure_decorator(func):
+                def configure_with_promptwatch(*args, **kwargs):
+                    callback_manager = func(*args, **kwargs)
+                    if callback_manager and not any(isinstance(handler, LangChainCallbackHandler) for handler in callback_manager.handlers):
+                        callback_manager.add_handler(self.langchain_callback_handler)
+                    return callback_manager
+                configure_with_promptwatch.__original_func = func
+                return configure_with_promptwatch
+            decorated_configure = promptwatch_callback_configure_decorator(langchain_callback_manager_module._configure)
+                    
+            setattr(langchain_callback_manager_module, "_configure",  decorated_configure)
+        except ImportError:
+            
 
+            try:
+                from langchain.callbacks import get_callback_manager
+                langchain_callback_manager = langchain_callback_manager or get_callback_manager()
+                langchain_callback_manager.add_handler(self.langchain_callback_handler)
+            except ImportError:
+                print("\033[31m"+"Unable to auto-initialize PromptWatch tracing. \nWorkaround: Use PromptWatch.langchain.get_langchain_callback_handler and set it into callback argument to your chains"+"\033[0m")
 
-        self.langchain_callback_handler = LangChainCallbackHandler(self)
-        langchain_callback_manager = langchain_callback_manager or get_callback_manager()
-        langchain_callback_handler = self.get_langchain_callback_handler()
-        langchain_callback_manager.add_handler(langchain_callback_handler)
+        
 
 
         return self
@@ -64,10 +87,13 @@ class LangChainSupport:
     
 
     def get_cached_llm(self, llm:LLM, embeddings:Embeddings=None, token_limit:int=None, similarity_limit:float=0.97):
-        return CachedLLM(
-            inner_llm=llm,
-            cache_embeddings=embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
-    
+        if isinstance(llm, BaseChatModel):
+            return CachedChatLLM(llm, embeddings, token_limit, similarity_limit)
+        else:
+            return CachedLLM(
+                inner_llm=llm,
+                cache_embeddings=embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
+        
     # def enable_global_cache(self, embeddings:Embeddings, token_limit:int, similarity_limit:float=0.97)->PromptWatchLlmCache:
     #     """Enable global cache for all LLMs"""
     #     prompt_cache = PromptWatchLlmCache(None, embeddings, token_limit, similarity_limit)
@@ -360,164 +386,6 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
 
 
-
-# class PromptWatchLlmCache(BaseCache):
-
-#     def __init__(self, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
-        
-#         self.cache_namespace_key = cache_namespace_key
-#         self.cache_embeddings = cache_embeddings
-#         self.similarity_limit=similarity_limit
-#         self.short_term_cache = OrderedDict()
-#         self.embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
-
-#         self.token_limit=token_limit
-
-#     def lookup(self, prompt: str, llm_string: str) -> Optional[List[Generation]]:
-#         """Look up based on prompt and llm_string."""
-#         promptwatch_context = PromptWatch.get_active_instance()
-#         cache_prompt_key = f"{llm_string}\n:{prompt}"
-        
-#         if promptwatch_context:
-#             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-#             cached_res=cache.get(cache_prompt_key)
-#             self.short_term_cache[cache_prompt_key]=cached_res
-#             if cached_res:
-#                 return [Generation(text=cached_res.result, generation_info={"cached":True})]
-#             else:
-#                 return None
-
-    
-#     def update(self, prompt: str, llm_string: str, return_val: List[Generation]) -> None:
-#         """Update cache based on prompt and llm_string."""
-#         cache_prompt_req = f"{llm_string}\n:{prompt}"
-        
-#         stored_cache_handle = self.short_term_cache.get(cache_prompt_req)
-
-#         if stored_cache_handle:
-#             promptwatch_context = PromptWatch.get_active_instance()
-#             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-#             cache.add(stored_cache_handle)
-
-
-
-#         while len(self.short_term_cache) > 100:
-#             self.short_term_cache.popitem(last=False)
-        
-
-    
-#     def clear(self) -> None:
-#         promptwatch_context = PromptWatch.get_active_instance()
-#         if promptwatch_context:
-#             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-#             cache.clear()
-#         else:
-#             Client()
-
-
-class _CachedLLM(LLM):
-    """Cached LLM wrapper around the actual LLM."""
-    inner_llm:Any
-    cache_namespace_key:Optional[str]
-    cache_embeddings:Optional[Embeddings]
-    token_limit:Optional[int]
-    similarity_limit:Optional[float]
-
-       
-    def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
-        super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
-       
-    @property
-    def _llm_type(self) -> str:
-        """Return type of llm."""
-        return "cached-llm"
-    
-    def generate_prompt(
-        self, prompts: List[PromptValue], stop: Optional[List[str]] = None
-    ) -> LLMResult:
-        # overriding generate_prompt becasuse we want to pass down the prompts to the inner llm
-        promptwatch_context = PromptWatch.get_active_instance()
-        if promptwatch_context:
-            promptwatch_context.add_context(FORMATTED_PROMPT_CONTEXT_KEY, prompts)
-        return self.generate(prompts, stop=stop)
-    
-    
-    def generate(
-        self, prompts: List[PromptValue], stop: Optional[List[str]] = None
-    ) -> LLMResult:
-        """ Overriding default to skip tracing + passing down the original prompt value"""
-        output = self._generate(prompts, stop=stop)
-        return output
-    
-    async def agenerate(
-        self, prompts: List[PromptValue], stop: Optional[List[str]] = None
-    ) -> LLMResult:
-        """ Overriding default to skip tracing"""
-        output = await self._agenerate(prompts, stop=stop)
-        return output
-    
-    def _get_from_cache(self, prompt: PromptValue, stop: Optional[List[str]] = None):
-        promptwatch_context = PromptWatch.get_active_instance()
-        if promptwatch_context:
-            start_time=datetime.datetime.now(tz=datetime.timezone.utc)
-            embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
-            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt.to_string()}" if stop else prompt.to_string()
-            cached_res = cache.get(cache_prompt_req)
-            if cached_res and promptwatch_context.langchain.langchain_callback_handler:
-                prompts_strings = [prompt.to_string() if not isinstance(prompt,str) else prompt]
-                
-                promptwatch_context.langchain.langchain_callback_handler.on_llm_start({"name":self.__class__.__name__},prompts_strings)
-                
-                #custom on_llm_end !:
-
-                #override start time with the real start time before caching
-                current_llm_prompt:LlmPrompt = promptwatch_context.current_activity
-                current_llm_prompt.start_time=start_time
-                current_llm_prompt.generated = cached_res.result
-                current_llm_prompt.metadata["cached"]=True
-                current_llm_prompt.metadata["cache_info"]=cached_res.metadata
-             
-                promptwatch_context._close_current_activity()
-
-           
-            return  cached_res, lambda cached_res,result : cache.add(cached_res, result) 
-        else:
-            return None, None
-        
-    def _call(self, prompt: Union[str, PromptValue], stop: Optional[List[str]] = None) -> str:
-        """ Implementing abstract call method."""
-        cached_res,callback=self._get_from_cache(prompt, stop=stop)
-        if not cached_res:
-            if isinstance(prompt, ChatPromptValue):
-                prompt=prompt.messages
-            elif not isinstance(prompt, str):
-                prompt=prompt.to_string()
-            self.callback_manager.on_llm_start(
-                {"name": self.__class__.__name__}, prompt_strings, verbose=self.verbose
-            )
-            res = self.inner_llm.generate([prompt], stop) #using generate because we want callbacks to be called
-            if isinstance(res ,BaseMessage):
-                res = res.content
-            if callback:
-                callback(cached_res, res)
-            return res
-        else:
-            return cached_res.result
-        
-        
-    async def _acall(self, prompt: str, stop: Optional[List[str]] = None) -> str:
-        """ Implementing abstract async call method."""
-        
-        cached_res,callback=self._get_from_cache(prompt, stop=stop)
-        if not cached_res:
-            res = await self.inner_llm._acall(prompt, stop=stop)
-            if callback:
-                callback(cached_res, res)
-            return res
-        else:
-            self.promp
-            return cached_res.result
     
 
 
@@ -731,13 +599,13 @@ class CachedChatLLM(BaseChatModel):
         return "cached-chat-llm"
     
     def generate_prompt(
-        self, prompts: List[PromptValue], stop: Optional[List[str]] = None
+        self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs
     ) -> LLMResult:
         # overriding generate_prompt because we want to pass down the prompts to the inner llm
         promptwatch_context = PromptWatch.get_active_instance()
         if promptwatch_context and len(prompts)==1 :
             promptwatch_context.add_context(FORMATTED_PROMPT_CONTEXT_KEY, prompts[0])
-        super().generate_prompt(prompts, stop=stop)
+        return super().generate_prompt(prompts, stop=stop)
         
     
     def _get_from_cache(self, messages: Union[str, List[BaseMessage]], stop: Optional[List[str]] = None):
@@ -757,7 +625,7 @@ class CachedChatLLM(BaseChatModel):
         else:
             return None, None
         
-    def _call(self, messages: List[BaseMessage], stop: Optional[List[str]] = None) -> str:
+    def _call(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> str:
         """ Implementing abstract call method."""
         return self._generate(messages, stop=stop).generations[0].message
     
@@ -768,7 +636,7 @@ class CachedChatLLM(BaseChatModel):
         return (await self._agenerate(messages, stop=stop)).generations[0].message
         
     async def _agenerate(
-       self, messages: List[BaseMessage], stop: Optional[List[str]] = None
+       self, messages: List[BaseMessage], stop: Optional[List[str]] = None,**kwargs
     ):
         cached_res,callback=self._get_from_cache(messages, stop=stop)
         
@@ -776,7 +644,7 @@ class CachedChatLLM(BaseChatModel):
         if not cached_res:
 
 
-            chat_result:ChatResult = await self.inner_llm._agenerate(messages, stop) 
+            chat_result:ChatResult = await self.inner_llm._agenerate(messages, stop, **kwargs) 
             if callback:
                 callback(cached_res, chat_result.generations[0].text)
             return chat_result
@@ -790,7 +658,7 @@ class CachedChatLLM(BaseChatModel):
 
         
     def _generate(
-        self, messages: List[BaseMessage], stop: Optional[List[str]] = None
+        self, messages: List[BaseMessage], stop: Optional[List[str]] = None,**kwargs
     ) -> ChatResult:
         cached_res,callback=self._get_from_cache(messages, stop=stop)
         
@@ -798,7 +666,7 @@ class CachedChatLLM(BaseChatModel):
         if not cached_res:
 
 
-            chat_result:ChatResult = self.inner_llm._generate(messages, stop) 
+            chat_result:ChatResult = self.inner_llm._generate(messages, stop,**kwargs) 
             if callback:
                 callback(cached_res, chat_result.generations[0].text)
             return chat_result
