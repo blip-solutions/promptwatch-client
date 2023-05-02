@@ -12,7 +12,7 @@ setuptools.setup(name='promptwatch',
                 long_description_content_type='text/markdown',
                 author='Juraj Bezdek',
                 author_email='juraj.bezdek@blip.solutions',
-                #url='https://github.com/blip-solutions/promptwatch',
+                url='https://github.com/blip-solutions/promptwatch-client',
                 package_dir={"": "src"},
                 packages=setuptools.find_packages(where="src"),
                 license='MIT License',
@@ -24,6 +24,7 @@ setuptools.setup(name='promptwatch',
                 python_requires='>=3.8',
                 install_requires=[
                     "langchain",
-                    "pydantic"
+                    "pydantic",
+                    "tiktoken"
                 ]
                 )

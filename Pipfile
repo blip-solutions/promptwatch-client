@@ -4,12 +4,13 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-langchain = "*"
 promptwatch = {editable = true, path = "."}
+tiktoken = "*"
+chromadb = "==0.3.15"
+langchain = "*"
 
 [dev-packages]
 ipykernel = "*"
-chromadb = "*"
 persistqueue = "*"
 autopep8 = "*"
 

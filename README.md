@@ -62,7 +62,7 @@ PromptWatch tracks all the details that LangChain exposes via its tracking "API"
   - execution details like model, temperature, etc. (everything you need to re-run the prompt with the same exact setup)
   - total used tokens
   - **costs (based on OpenAI price list per model)**
-  - **prompt template and it's parameters**
+  - **prompt template and its parameters**
   
  
 
@@ -93,15 +93,15 @@ PromptWatch.log("this will raise an exception!")
 You can register any LangChain prompt template for detailed monitoring
 
 ```python
-from promptwatch import PromptWatch
+from promptwatch import PromptWatch, register_prompt_template
 from langchain import OpenAI, LLMChain, PromptTemplate
 
 prompt_template = PromptTemplate.from_template("Finish this sentence {input}")
 my_chain = LLMChain(llm=OpenAI(), prompt=prompt_template)
 
+register_prompt_template("your_template_name",prompt_template) 
+
 with PromptWatch() as pw:
-    # register the template for detailed tracking
-    pw.register_prompt_template("your_template_name",prompt_template) 
     
     #execute the chain
     my_chain("The quick brown fox jumped over")
