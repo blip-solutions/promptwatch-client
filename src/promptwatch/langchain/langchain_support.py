@@ -386,7 +386,58 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
 
 
+
+class PromptWatchLlmCache(BaseCache):
+
+    def __init__(self, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
+        
+        self.cache_namespace_key = cache_namespace_key
+        self.cache_embeddings = cache_embeddings
+        self.similarity_limit=similarity_limit
+        
+        self.embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
+
+        self.token_limit=token_limit
+
+    def lookup(self, prompt: str, llm_string: str) -> Optional[List[Generation]]:
+        """Look up based on prompt and llm_string."""
+        promptwatch_context = PromptWatch.get_active_instance()
+        cache_prompt_key = f"{llm_string}\n:{prompt}"
+        
+        if promptwatch_context:
+            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+            cached_res=cache.get(cache_prompt_key)
+            
+            if cached_res:         
+                return  [Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata, "_cached_result":cached_res})]
+       
+            else:
+                return None
+
     
+    def update(self, prompt: str, llm_string: str, return_val: List[Generation]) -> None:
+        """Update cache based on prompt and llm_string."""
+        
+        cached_res = return_val[0].generation_info.get("_cached_result")
+
+        
+        promptwatch_context = PromptWatch.get_active_instance()
+        cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+        cache.add(cached_res)
+
+
+
+
+    
+    def clear(self, until:datetime=None) -> None:
+        promptwatch_context = PromptWatch.get_active_instance()
+        if promptwatch_context:
+            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+            cache.clear()
+        else:
+            Client().clear(self.cache_namespace_key,until=until)
+
+
 
 
 
@@ -591,6 +642,7 @@ class CachedChatLLM(BaseChatModel):
     token_limit:Optional[int]
     similarity_limit:Optional[float]
     def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
+        
         super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
        
     @property
@@ -617,7 +669,7 @@ class CachedChatLLM(BaseChatModel):
             embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
             
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt.to}" if stop else prompt
+            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
             cached_res = cache.get(cache_prompt_req)
            
            
