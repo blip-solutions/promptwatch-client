@@ -170,10 +170,22 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
             
             prompt_input_values = self.prompt_watch.current_activity.inputs
+            
+            # process history/chat messages placeholder (chat prompt)
+            
+
             if prompt_template and prompt_template.prompt_input_params and prompt_input_values:
-                prompt_input_values = {k:v for k,v in prompt_input_values.items() if k in prompt_template.prompt_input_params and isinstance(v,str)}
+                prompt_input_values = {k:v for k,v in prompt_input_values.items() if k in prompt_template.prompt_input_params and (isinstance(v,str) )}
             else:
                 prompt_input_values={k:v for k,v in prompt_input_values.items() if isinstance(v,str)}
+
+            if  prompt_template and isinstance(prompt_template.prompt_template,list):
+                non_text_input = {k:v for k,v in  self.prompt_watch.current_activity.inputs.items() if not isinstance(v,str)}
+                for k, v in non_text_input.items():
+                    if v and isinstance(v,list) and isinstance(v[0],BaseMessage):
+                        prompt_input_values[k] = convert_chat_messages(v)
+                        
+
         else:
             info_message="Could not retrieve all the additional information needed to for reproducible prompt execution. Consider registering the prompt template."
 
@@ -229,9 +241,11 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
         if response.llm_output is not None:
             self.prompt_watch.current_activity.metadata["llm_output"]=response.llm_output
-            if "token_usage" in response.llm_output:
-                token_usage = response.llm_output["token_usage"]
-                if "total_tokens" in token_usage:
+            token_usage= response.llm_output.get("token_usage")
+            if token_usage and isinstance(token_usage,dict):
+                total_tokens = token_usage.get("total_tokens")
+                
+                if total_tokens:
                     self.prompt_watch.current_activity.metadata["total_tokens"] = self.prompt_watch.current_activity.metadata.get("total_tokens",0)+ token_usage["total_tokens"]
         self.prompt_watch._close_current_activity()
 
@@ -386,7 +400,58 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
 
 
+
+class PromptWatchLlmCache(BaseCache):
+
+    def __init__(self, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
+        
+        self.cache_namespace_key = cache_namespace_key
+        self.cache_embeddings = cache_embeddings
+        self.similarity_limit=similarity_limit
+        
+        self.embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
+
+        self.token_limit=token_limit
+
+    def lookup(self, prompt: str, llm_string: str) -> Optional[List[Generation]]:
+        """Look up based on prompt and llm_string."""
+        promptwatch_context = PromptWatch.get_active_instance()
+        cache_prompt_key = f"{llm_string}\n:{prompt}"
+        
+        if promptwatch_context:
+            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+            cached_res=cache.get(cache_prompt_key)
+            
+            if cached_res:         
+                return  [Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata, "_cached_result":cached_res})]
+       
+            else:
+                return None
+
     
+    def update(self, prompt: str, llm_string: str, return_val: List[Generation]) -> None:
+        """Update cache based on prompt and llm_string."""
+        
+        cached_res = return_val[0].generation_info.get("_cached_result")
+
+        
+        promptwatch_context = PromptWatch.get_active_instance()
+        cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+        cache.add(cached_res)
+
+
+
+
+    
+    def clear(self, until:datetime=None) -> None:
+        promptwatch_context = PromptWatch.get_active_instance()
+        if promptwatch_context:
+            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
+            cache.clear()
+        else:
+            Client().clear(self.cache_namespace_key,until=until)
+
+
 
 
 
@@ -575,12 +640,29 @@ class CachedLLM(LLM):
                     callback(cached_res, llmresult.generations[0][0].text)
                 return llmresult
             else:
-                generation = Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata})
-                return LLMResult(generations=[[generation]])
+                generation = Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata,  "cache_namespace_key":cached_res.cache_namespace_key})
+                return LLMResult(generations=[[generation]], llm_output={"cached":True})
             
         else:
             return self.inner_llm._generate(prompts, stop) 
         
+    async def _agenerate(self, 
+                         prompts: List[str], stop: Optional[List[str]] = None
+        ) -> LLMResult:
+        if prompts and len(prompts)==1:
+            cached_res,callback=self._get_from_cache(prompts[0], stop=stop)
+            
+            if not cached_res:
+
+                chat_result:ChatResult = await self.inner_llm._agenerate(prompts, stop) 
+                if callback:
+                    callback(cached_res, chat_result.generations[0].text)
+                return chat_result
+            else:
+                generation = Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata,  "cache_namespace_key":cached_res.cache_namespace_key})
+                return LLMResult(generations=[[generation]], llm_output={"cached":True})
+        else:
+            return self.inner_llm._generate(prompts, stop) 
 
 
 class CachedChatLLM(BaseChatModel):
@@ -591,6 +673,7 @@ class CachedChatLLM(BaseChatModel):
     token_limit:Optional[int]
     similarity_limit:Optional[float]
     def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
+        
         super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
        
     @property
@@ -617,7 +700,7 @@ class CachedChatLLM(BaseChatModel):
             embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
             
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt.to}" if stop else prompt
+            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
             cached_res = cache.get(cache_prompt_req)
            
            
@@ -640,9 +723,7 @@ class CachedChatLLM(BaseChatModel):
     ):
         cached_res,callback=self._get_from_cache(messages, stop=stop)
         
-        
         if not cached_res:
-
 
             chat_result:ChatResult = await self.inner_llm._agenerate(messages, stop, **kwargs) 
             if callback:
@@ -650,11 +731,8 @@ class CachedChatLLM(BaseChatModel):
             return chat_result
         else:
             generated_msg = AIMessage(content=cached_res.result)
-            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata})
-        
-       
-        
-        return ChatResult(generations=[generation])
+            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata, "cache_namespace_key":cached_res.cache_namespace_key})
+            return ChatResult(generations=[generation],llm_output={"cached":True})
 
         
     def _generate(
@@ -672,7 +750,12 @@ class CachedChatLLM(BaseChatModel):
             return chat_result
         else:
             generated_msg = AIMessage(content=cached_res.result)
-            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata})
- 
-        return ChatResult(generations=[generation])
+            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata, "cache_namespace_key":cached_res.cache_namespace_key})
+            return ChatResult(generations=[generation],llm_output={"cached":True})
     
+    def _combine_llm_outputs(self, llm_outputs: List[Optional[dict]]) -> dict:
+        """Combine llm outputs."""
+        if llm_outputs and len(llm_outputs)==1 and llm_outputs[0].get("cached"):
+            return llm_outputs[0]
+        else:
+            return self.inner_llm._combine_llm_outputs(llm_outputs)
