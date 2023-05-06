@@ -245,7 +245,7 @@ class PromptWatch():
             
         if not self.current_session.session_name and isinstance(activity,ChainSequence) and activity.inputs:
             # if current session doesn't have a name, use first non empty input of first chain
-            self.current_session.session_name = next((v for k,v in activity.inputs.items() if v), None)
+            self.current_session.session_name = next((v for k,v in activity.inputs.items() if v and isinstance(v,str)), None)
 
         if not self.current_session.start_time:
             self.start_session()
