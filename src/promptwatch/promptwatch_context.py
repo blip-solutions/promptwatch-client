@@ -14,12 +14,36 @@ from uuid import uuid4
 import types
 from .utils import wrap_a_method, classproperty
 from .caching import PromptWatchCacheManager
+from abc import ABCMeta
 
 
+class ContextTrackerSingleton(ABCMeta,type):
+    """
+    Singleton metaclass for ensuring only one instance of a class per thread
+    """
 
-
-class PromptWatch():
     _thread_local = threading.local()
+
+    def __call__(cls, *args, **kwargs):
+        """Call method for the singleton metaclass."""
+        if not hasattr(ContextTrackerSingleton._thread_local, "_instance"):
+            ContextTrackerSingleton._thread_local._instance = super(ContextTrackerSingleton, cls).__call__(*args, **kwargs)
+        else:
+            ContextTrackerSingleton._thread_local._instance._cached_init_(*args, **kwargs)
+        return ContextTrackerSingleton._thread_local._instance 
+        
+    def get_current():
+        if hasattr(ContextTrackerSingleton._thread_local, "_instance"):
+            return ContextTrackerSingleton._thread_local._instance
+        else:
+            return None
+
+
+    def remove_active_instance(cls):
+        del ContextTrackerSingleton._thread_local._instance 
+
+class PromptWatch(metaclass=ContextTrackerSingleton):
+    
     prompt_template_register_cache={}
 
     def __init__(self, session_id: Optional[str] = None, tracking_project: Optional[str] = None, tracking_tenant: Optional[str] = None, api_key: Optional[str] = None):
@@ -90,7 +114,7 @@ class PromptWatch():
 
 
     def __enter__(self):
-        self._thread_local.active_instance = self
+        
 
         if not self.tracing_handlers:
             # lets enable tracing by default
@@ -110,7 +134,7 @@ class PromptWatch():
         except Exception as ex:
             self.logger.warn(f"Failed to persist the session: {ex}")
 
-        del self._thread_local.active_instance
+       
 
 
 
@@ -134,8 +158,8 @@ class PromptWatch():
         """
         Returns active instance of PromptWatch if run inside PromptWatch context
         """
-        return getattr(cls._thread_local, 'active_instance', None)
-
+        return ContextTrackerSingleton.get_current()
+    
 
 
     @classmethod
@@ -260,6 +284,7 @@ class PromptWatch():
     
         self.pending_stack.append(activity)
         self.chain_hierarchy.append(activity)
+        return
         
     
 
@@ -330,6 +355,7 @@ class PromptWatch():
         self._flush_stack()
         if self.current_session.steps_count:
             self.client.finish_session(self.current_session)
+        ContextTrackerSingleton.remove_active_instance()
 
     def _on_error(self, error, kwargs):
         self.current_activity.error=str(error)

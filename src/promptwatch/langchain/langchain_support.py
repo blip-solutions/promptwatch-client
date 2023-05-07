@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Union, Callable
 import datetime
 from pydantic import root_validator
 from langchain.prompts.base import BasePromptTemplate
-from langchain.prompts.chat import ChatPromptValue,  HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
+from langchain.prompts.chat import ChatPromptValue, ChatPromptTemplate, HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
 from langchain.llms.base import LLM, BaseLLM
 from langchain.chat_models.base import BaseChatModel
 from langchain.chains import LLMChain
@@ -20,7 +20,7 @@ from ..client import Client
 from ..data_model import NamedPromptTemplateDescription,PromptTemplateDescription, LlmPrompt, ParallelPrompt, ChainSequence, ChatMessage, Answer, Action, Question, RetrievedDocuments, DocumentSnippet, ChatMessagePromptTemplate
 from ..utils import find_the_caller_in_the_stack, is_primitive_type, wrap_a_method
 
-from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY
+from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY
 
 from typing import List, Dict
 from .. import PromptWatch
@@ -28,7 +28,6 @@ from langchain.cache import BaseCache
 from langchain.schema import Generation
 from collections import OrderedDict
 
-import langchain
 
 class LangChainSupport:
 
@@ -54,13 +53,16 @@ class LangChainSupport:
                 def configure_with_promptwatch(*args, **kwargs):
                     callback_manager = func(*args, **kwargs)
                     if callback_manager and not any(isinstance(handler, LangChainCallbackHandler) for handler in callback_manager.handlers):
-                        callback_manager.add_handler(self.langchain_callback_handler)
+                        pw = PromptWatch.get_active_instance()
+                        if pw:
+                            handler = pw.langchain.get_langchain_callback_handler()
+                            callback_manager.add_handler(handler)
                     return callback_manager
                 configure_with_promptwatch.__original_func = func
                 return configure_with_promptwatch
-            decorated_configure = promptwatch_callback_configure_decorator(langchain_callback_manager_module._configure)
-                    
-            setattr(langchain_callback_manager_module, "_configure",  decorated_configure)
+            if not hasattr(langchain_callback_manager_module._configure,"__original_func"):
+                decorated_configure = promptwatch_callback_configure_decorator(langchain_callback_manager_module._configure)    
+                setattr(langchain_callback_manager_module, "_configure",  decorated_configure)
         except ImportError:
             
 
@@ -113,10 +115,13 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.tracing_handlers={}
         #we keep these in order to reverse
         self.monkey_patched_functions=[]
-        self.prompt_watch=prompt_watch
+        
         super().__init__()
         
-        
+    @property
+    def prompt_watch(self) -> PromptWatch:
+        """Whether to call verbose callbacks even if verbose is False."""
+        return PromptWatch.get_active_instance()
 
 
     @property
@@ -145,11 +150,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         info_message=None
         formatted_prompt=None
 
+        current_llm_chain:LLMChain= self.prompt_watch.get_context(LLM_CHAIN_CONTEXT_KEY)
         # this should ensure that all the additional data is available in the context
-        if self.current_llm_chain:
-            if self.current_llm_chain.llm and self.current_llm_chain.llm.dict:
-                llm = self.current_llm_chain.llm
-                if hasattr(self.current_llm_chain.llm,"inner_llm"): # cachedLLM
+        if current_llm_chain:
+            if current_llm_chain.llm and current_llm_chain.llm.dict:
+                llm = current_llm_chain.llm
+                if hasattr(current_llm_chain.llm,"inner_llm"): # cachedLLM
                     llm = llm.inner_llm
                 llm_info = {k:v for k,v in llm.dict().items() if is_primitive_type(v)}
                 llm_info["stop"] = self.prompt_watch.current_activity.inputs.get("stop")
@@ -158,20 +164,23 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             if template_name:
                 prompt_template = PromptWatch.prompt_template_register_cache.get(template_name)
 
-
-            formatted_prompt = self.prompt_watch.get_context(FORMATTED_PROMPT_CONTEXT_KEY)
-            if isinstance(formatted_prompt,ChatPromptValue):
-                #throwing away the original prompt from langchain tracing and replacing it with the original formatted messages
-                prompts = [convert_chat_messages(formatted_prompt.messages)]
-
             if not prompt_template:
                 # lets create anonymous prompt template description
-                prompt_template = create_prompt_template_description(self.current_llm_chain.prompt)
+                prompt_template = create_prompt_template_description(current_llm_chain.prompt)
 
-            
             prompt_input_values = self.prompt_watch.current_activity.inputs
+
+            formatted_prompt = self.prompt_watch.get_context(FORMATTED_PROMPT_CONTEXT_KEY)
+            if isinstance(current_llm_chain.prompt,ChatPromptTemplate):
+                if not formatted_prompt:
+                    # we need to reformat the prompt so we can get the original values, not the strings
+                    formatted_prompt = current_llm_chain.prep_prompts([prompt_input_values])[0][0]
+                if formatted_prompt:
+                    #throwing away the original prompt from langchain tracing and replacing it with the original formatted messages
+                    prompts = [convert_chat_messages(formatted_prompt.messages)]
             
-            # process history/chat messages placeholder (chat prompt)
+            
+            
             
 
             if prompt_template and prompt_template.prompt_input_params and prompt_input_values:
@@ -230,8 +239,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         else:
             thoughts=[self.prompt_watch.current_activity]
         
-        if hasattr(self,"current_llm_chain"):
-            self.current_llm_chain = None
+        
         if not self.prompt_watch.current_activity.metadata:
             self.prompt_watch.current_activity.metadata={}
 
@@ -265,7 +273,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         """Run when chain starts running."""
         
         if serialized.get("name").startswith("LLM") :
-            self.current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
+            current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
+            self.prompt_watch.add_context(LLM_CHAIN_CONTEXT_KEY,current_llm_chain)
 
         self.try_get_retrieved_documents(inputs)
                   
@@ -319,8 +328,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
         """Run when chain ends running."""
         
-        if self.current_llm_chain:
-            self.current_llm_chain =None
+        
+        self.prompt_watch._remove_context(LLM_CHAIN_CONTEXT_KEY)
             
         self.prompt_watch.current_activity.outputs=outputs
         if outputs.get("answer"):
@@ -611,7 +620,7 @@ class CachedLLM(LLM):
             embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
             
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt.to}" if stop else prompt
+            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
             cached_res = cache.get(cache_prompt_req)
            
            

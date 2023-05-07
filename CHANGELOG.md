@@ -17,3 +17,11 @@
 ##  Version 0.0.5 (2023-05-06)
 - fixed dismissed llm_output in LlmPrompt metadata
 - fixed dismissing the memory parameter in for chat models
+
+##  Version 0.0.6 (2023-05-06)
+- fixed potential problems caused by deepcopying of handler in langchain which could lead to breaking the singleton principle
+- fix cached llm
+- better prompt logging for chat
+
+##  Version 0.0.7 (2023-05-07)
+- one more fix for langchain deepcopying and context sharing - fixing not propagating some additional info

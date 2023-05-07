@@ -7,6 +7,7 @@ from langchain.chains import LLMChain
 
 FORMATTED_PROMPT_CONTEXT_KEY = "formatted_prompt"
 TEMPLATE_NAME_CONTEXT_KEY = "template_name"
+LLM_CHAIN_CONTEXT_KEY="current_llm_chain"
 
 def format_prompt_decorator(template_name:str):
     def decorator_function(func):
@@ -20,12 +21,10 @@ def format_prompt_decorator(template_name:str):
                 _self=args[0]
                 pw.add_context(FORMATTED_PROMPT_CONTEXT_KEY, result)
                 pw.add_context(TEMPLATE_NAME_CONTEXT_KEY, template_name)
-                if pw.current_activity and hasattr(pw, "langchain_callback_handler")and isinstance(pw.current_activity,ChainSequence) and pw.current_activity.sequence_type=="LLMChain":
-                    # if current_llm_chain is None, we want to fill it in. Probably running in async mode, so it was not accessible from the callback handler
-                    if pw.langchain.langchain_callback_handler.current_llm_chain is None:
-                        llm_chain = find_the_caller_in_the_stack(type=LLMChain)
-                        if llm_chain:
-                            pw.langchain.langchain_callback_handler.current_llm_chain =  llm_chain
+                if isinstance(pw.current_activity,ChainSequence) and pw.current_activity.sequence_type=="LLMChain":
+                    llm_chain = find_the_caller_in_the_stack(type=LLMChain)
+                    if llm_chain:
+                        pw.add_context(LLM_CHAIN_CONTEXT_KEY, llm_chain)  
                         
 
                 
