@@ -28,8 +28,7 @@ class ContextTrackerSingleton(ABCMeta,type):
         """Call method for the singleton metaclass."""
         if not hasattr(ContextTrackerSingleton._thread_local, "_instance"):
             ContextTrackerSingleton._thread_local._instance = super(ContextTrackerSingleton, cls).__call__(*args, **kwargs)
-        else:
-            ContextTrackerSingleton._thread_local._instance._cached_init_(*args, **kwargs)
+       
         return ContextTrackerSingleton._thread_local._instance 
         
     def get_current():
