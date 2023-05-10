@@ -110,7 +110,7 @@ class EmbeddingProviderBase:
         return False
 
     @abstractmethod
-    def __call__(self, prompt:str, include_token_usage:bool=False) -> Union[List[float], tuple[List[float],int]]:
+    def __call__(self, prompt:str, include_token_usage:bool=False) -> Union[List[float], Tuple[List[float],int]]:
         pass
         
 
