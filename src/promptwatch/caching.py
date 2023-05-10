@@ -110,7 +110,7 @@ class EmbeddingProviderBase:
         return False
 
     @abstractmethod
-    def __call__(self, prompt:str, include_token_usage:bool=False) -> Union[List[float], tuple[List[float],int]]:
+    def __call__(self, prompt:str, include_token_usage:bool=False) -> Union[List[float], Tuple[List[float],int]]:
         pass
         
 
@@ -178,11 +178,13 @@ class PromptWatchCacheManager:
         else:
             self.caches[cache_namespace_key] = PromptWatchCache(cache_namespace_key, RemoteImpl(self.promptwatch_context, cache_namespace_key, embed_func), embed_func, token_limit=token_limit, similarity_limit=similarity_limit)
 
+    
     def get_cache(self, cache_namespace_key=None)->PromptWatchCache:
-        cache_namespace_key=cache_namespace_key or DEFAULT_CACHE_KEY
-        if not cache_namespace_key in self.caches:
-            raise Exception(f"Cache {cache_namespace_key} not initialized")
-        return self.caches[cache_namespace_key]
+        return self.get_or_init_cache(cache_namespace_key=cache_namespace_key)
+        # cache_namespace_key=cache_namespace_key or DEFAULT_CACHE_KEY
+        # if not cache_namespace_key in self.caches:
+        #     raise Exception(f"Cache {cache_namespace_key} not initialized")
+        # return self.caches[cache_namespace_key]
     
     def get_or_init_cache(self, cache_namespace_key:str=None,  embed_func:Callable[[str],List[float]]=None, token_limit=None, similarity_limit=0.97, local:bool=False)->PromptWatchCache:
         cache_namespace_key=cache_namespace_key or DEFAULT_CACHE_KEY
