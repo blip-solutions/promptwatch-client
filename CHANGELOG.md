@@ -30,3 +30,8 @@
 - fix typing error in caching (caused problems with python 3.10+)
 - fixed nesting context problem
 - disabled exception on get cache that has not been initialized (reinitializing instead)
+
+## Version 0.1.0 (2023-05-15)
+- introduction of UnitTests
+- support for initialization of tracking_project from PROMPTWATCH_TRACKING_PROJECT Env variable
+- refactoring of the file structure

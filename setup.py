@@ -25,6 +25,7 @@ setuptools.setup(name='promptwatch',
                 install_requires=[
                     "langchain",
                     "pydantic",
-                    "tiktoken"
+                    "tiktoken",
+                    "tqdm",
                 ]
                 )

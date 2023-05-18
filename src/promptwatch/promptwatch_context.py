@@ -2,7 +2,7 @@
 from __future__ import annotations
 import base64
 import threading
-from typing import Any, Dict, Optional,List, Union, Tuple
+from typing import Any, Dict, Optional,List, Union, Tuple, Callable,Any
 import datetime
 import os
 import re
@@ -14,7 +14,9 @@ from uuid import uuid4
 import types
 from .utils import wrap_a_method, classproperty
 from .caching import PromptWatchCacheManager
+from .constants import EnvVariables
 from abc import ABCMeta
+
 
 
 class ContextTrackerSingleton(ABCMeta,type):
@@ -37,7 +39,7 @@ class ContextTrackerSingleton(ABCMeta,type):
         else:
             return None
 
-
+    @classmethod
     def remove_active_instance(cls):
         del ContextTrackerSingleton._thread_local._instance 
 
@@ -66,10 +68,10 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.logger = logging.getLogger("PromptWatch")
         self.session_id = session_id
         self.tracking_project=tracking_project
-        self.tracking_tenant=tracking_tenant
+        self.tracking_tenant=tracking_tenant or os.environ.get(EnvVariables.PROMPTWATCH_TRACKING_PROJECT)
 
         if not api_key:
-            api_key=os.environ.get("PROMPTWATCH_API_KEY")
+            api_key=os.environ.get(EnvVariables.PROMPTWATCH_API_KEY)
         if not api_key:
             raise Exception("Unable to find PromptWatch API key. Either set api key as a parameter to PromptWatch(api_key='<your api key>') or set it up as an env. variable PROMPTWATCH_API_KEY. You can generate your API key here: https://app.promptwatch.io/get-api-key")
         else:
@@ -96,6 +98,10 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.context={}
         self._cache_manager = PromptWatchCacheManager(self)
         self.tracing_handlers={}
+
+        #event handlers that lasts only
+        self.on_activity_event_handlers=[]
+        
 
     @property
     def caching(self):
@@ -132,10 +138,19 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
             self.finish_session()
         except Exception as ex:
             self.logger.warn(f"Failed to persist the session: {ex}")
+        # we will clear the handlers because we don't want to keep them in memory since PromptWatch is a singleton and lives for the whole app lifecycle
+        self.on_activity_event_handlers.clear()
 
-       
+    
+    def add_on_activity_callback(self, event_handler: Callable[[ActivityBase],Any]):
+        if event_handler not in self.on_activity_event_handlers:
+            self.on_activity_event_handlers.append(event_handler)
 
-
+    def set_session_name(self, name:str):
+        if self.current_session:
+            self.current_session.session_name=name
+        else:
+            raise Exception("No active session. Please call this method inside PromptWatch context")
 
     @classmethod
     def get_current_session(cls) -> Session:
@@ -305,6 +320,13 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
                 activity.parent_activity_id=self.current_activity.id
             else:
                 activity.parent_activity_id=self.current_activity.parent_activity_id
+
+        for handler in self.on_activity_event_handlers:
+            try:
+                handler(activity)
+            except Exception as ex:
+                self.logger.exception(f"Failed to execute on_activity_event_handlers handler {handler.__name__}: {ex}")
+
         self.pending_stack.append(activity)
         
         
@@ -318,7 +340,12 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
             closing_chain.end_time = datetime.datetime.now(tz=datetime.timezone.utc)
             if closing_chain not in self.pending_stack:
                 self.pending_stack.append(closing_chain)
-        
+                
+        for handler in self.on_activity_event_handlers:
+            try:
+                handler(closing_chain)
+            except Exception as ex:
+                self.logger.exception(f"Failed to execute on_activity_event_handlers handler {handler.__name__}: {ex}")
         self._flush_stack()
 
     def _flush_stack(self):
