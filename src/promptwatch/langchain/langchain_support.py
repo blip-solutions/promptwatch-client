@@ -21,9 +21,7 @@ from .caching import CachedLLM, CachedChatLLM
 from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY
 
 from typing import List, Dict
-from .. import PromptWatch
-from langchain.cache import BaseCache
-from langchain.schema import Generation
+from ..promptwatch_context import PromptWatch, ContextTrackerSingleton
 
 
 class LangChainSupport:
@@ -109,15 +107,21 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             ) -> None:
         self.current_llm_chain:Optional[LLMChain]=None
         self.tracing_handlers={}
+        self.prompt_watch_session_id=prompt_watch.session_id
         #we keep these in order to reverse
         self.monkey_patched_functions=[]
         
         super().__init__()
+
         
     @property
     def prompt_watch(self) -> PromptWatch:
         """Whether to call verbose callbacks even if verbose is False."""
-        return PromptWatch.get_active_instance()
+        
+        prompt_watch_context = ContextTrackerSingleton.get_current(self.prompt_watch_session_id)
+        if not prompt_watch_context:
+            raise Exception("PromptWatch context could not be resolved")
+        return prompt_watch_context
 
 
     @property
