@@ -2,31 +2,26 @@
 from __future__ import annotations
 import re
 from abc import ABC
-from typing import Any, Dict, Optional, Union, Callable
+from typing import Any, Dict, Optional, Union
 import datetime
-from pydantic import root_validator
 from langchain.prompts.base import BasePromptTemplate
-from langchain.prompts.chat import ChatPromptValue, ChatPromptTemplate, HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
-from langchain.llms.base import LLM, BaseLLM
+from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
+from langchain.llms.base import LLM
 from langchain.chat_models.base import BaseChatModel
 from langchain.chains import LLMChain
 from langchain.embeddings.base import Embeddings
-from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage, ChatGeneration, ChatResult
+from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage
 from langchain.callbacks.base import BaseCallbackHandler
 
-from langchain.schema import PromptValue
 from langchain.schema import AgentAction, AgentFinish, LLMResult,  Document
 from ..client import Client
 from ..data_model import NamedPromptTemplateDescription,PromptTemplateDescription, LlmPrompt, ParallelPrompt, ChainSequence, ChatMessage, Answer, Action, Question, RetrievedDocuments, DocumentSnippet, ChatMessagePromptTemplate
 from ..utils import find_the_caller_in_the_stack, is_primitive_type, wrap_a_method
-
+from .caching import CachedLLM, CachedChatLLM
 from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY
 
 from typing import List, Dict
-from .. import PromptWatch
-from langchain.cache import BaseCache
-from langchain.schema import Generation
-from collections import OrderedDict
+from ..promptwatch_context import PromptWatch, ContextTrackerSingleton
 
 
 class LangChainSupport:
@@ -47,7 +42,6 @@ class LangChainSupport:
         try:
             # this will 
             #for langchain >0.0.153
-            from langchain.callbacks.manager import _configure
             import langchain.callbacks.manager as langchain_callback_manager_module
             def promptwatch_callback_configure_decorator(func):
                 def configure_with_promptwatch(*args, **kwargs):
@@ -113,15 +107,21 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             ) -> None:
         self.current_llm_chain:Optional[LLMChain]=None
         self.tracing_handlers={}
+        self.prompt_watch_session_id=prompt_watch.session_id
         #we keep these in order to reverse
         self.monkey_patched_functions=[]
         
         super().__init__()
+
         
     @property
     def prompt_watch(self) -> PromptWatch:
         """Whether to call verbose callbacks even if verbose is False."""
-        return PromptWatch.get_active_instance()
+        
+        prompt_watch_context = ContextTrackerSingleton.get_current(self.prompt_watch_session_id)
+        if not prompt_watch_context:
+            raise Exception("PromptWatch context could not be resolved")
+        return prompt_watch_context
 
 
     @property
@@ -191,6 +191,9 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             if  prompt_template and isinstance(prompt_template.prompt_template,list):
                 non_text_input = {k:v for k,v in  self.prompt_watch.current_activity.inputs.items() if not isinstance(v,str)}
                 for k, v in non_text_input.items():
+                    if v and isinstance(v,list) and isinstance(v[0],ChatMessage):
+                        prompt_input_values[k] = v
+                    # this should be necessary anymore... keeping it just in case
                     if v and isinstance(v,list) and isinstance(v[0],BaseMessage):
                         prompt_input_values[k] = convert_chat_messages(v)
                         
@@ -229,7 +232,6 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
-        pass
 
     
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
@@ -291,10 +293,11 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             self.prompt_watch.current_session.session_name=question
             if not self.prompt_watch.current_session.start_time:
                 self.prompt_watch.current_session.start_time=datetime.datetime.now(tz=datetime.timezone.utc)
-            #self.prompt_watch.client.start_session(self.prompt_watch.current_session)
-
+            
+        
+        
         current_chain=ChainSequence(
-                inputs=inputs,
+                inputs=serialize_chain_inputs(inputs),
                 metadata={},
                 sequence_type=serialized.get("name") or "others"
             )
@@ -304,10 +307,6 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.prompt_watch._open_activity(current_chain)
         
 
-    # def _trace_function_call(self, handler_key:str, function_name:str, args, kwargs, result):
-    #     handler = self.tracing_handlers.get(handler_key)
-    #     if handler:
-    #         handler(function_name, args, kwargs, result)
         
 
         
@@ -383,13 +382,11 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_text(self, text: str, **kwargs: Any) -> Any:
         """Run on arbitrary text."""
-        pass
 
     
     def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
         """Run on agent action."""
         
-        pass
         
 
 
@@ -405,63 +402,61 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
         
     
-    
-        
-
-
-
-class PromptWatchLlmCache(BaseCache):
-
-    def __init__(self, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
-        
-        self.cache_namespace_key = cache_namespace_key
-        self.cache_embeddings = cache_embeddings
-        self.similarity_limit=similarity_limit
-        
-        self.embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
-
-        self.token_limit=token_limit
-
-    def lookup(self, prompt: str, llm_string: str) -> Optional[List[Generation]]:
-        """Look up based on prompt and llm_string."""
-        promptwatch_context = PromptWatch.get_active_instance()
-        cache_prompt_key = f"{llm_string}\n:{prompt}"
-        
-        if promptwatch_context:
-            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-            cached_res=cache.get(cache_prompt_key)
-            
-            if cached_res:         
-                return  [Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata, "_cached_result":cached_res})]
-       
-            else:
-                return None
-
-    
-    def update(self, prompt: str, llm_string: str, return_val: List[Generation]) -> None:
-        """Update cache based on prompt and llm_string."""
-        
-        cached_res = return_val[0].generation_info.get("_cached_result")
 
         
-        promptwatch_context = PromptWatch.get_active_instance()
-        cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-        cache.add(cached_res)
 
 
 
-
-    
-    def clear(self, until:datetime=None) -> None:
-        promptwatch_context = PromptWatch.get_active_instance()
-        if promptwatch_context:
-            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, self.embed_func, self.token_limit, self.similarity_limit)
-            cache.clear()
-        else:
-            Client().clear(self.cache_namespace_key,until=until)
+def register_prompt_template(template_name:str,prompt_template, version:Optional[str]=None):
+        """
+        Register prompt template into context for more detailed tracking, versioning and evaluation
 
 
+        Args:
+            template_name (str): arbitrary unique template name (should not contain white spaces, max 126 chars)
+            prompt_template (Union[BasePromptTemplate,BaseChatPromptTemplate]): Any langchain prompt template
+            version (Optional[str], optional): Optional - (major) (SemVer) version of the template. Minor changes are tracked incrementally automatically. Useful if you are going to make a major change in the template, and you with to dive the version a distinct version number.
 
+        ## Examples:
+        
+        ### Registering regular prompt (completion)
+
+        ```
+        from promptwatch import PromptWatch
+        from langchain import OpenAI, LLMChain, PromptTemplate
+
+        prompt_template = PromptTemplate.from_template("Finish this sentence {input}")
+        my_chain = LLMChain(llm=OpenAI(), prompt=prompt_template)
+
+        with PromptWatch() as pw:
+            pw.register_prompt_template("simple_completion_template",prompt_template, version="1.0")
+            my_chain("The quick brown fox jumped over")
+        ```
+
+        ### Registering chat messages template (completion)
+        ...
+
+        """
+        if not template_name:
+            raise Exception("template_name can't be empty")
+        if re.search(r"\s", template_name):
+            raise Exception("template_name can't contain white spaces")
+        if len(template_name)>126:
+            raise Exception("template_name must be less than 126 characters")
+        
+        #TODO: hardcoded langchain_callback_handler
+        converted_template =  create_prompt_template_description(prompt_template, template_name=template_name, template_version=version)
+        from ..decorators import format_prompt_decorator
+        decorator_func = format_prompt_decorator(template_name)
+        
+        
+        wrap_a_method(prompt_template, "format_prompt", decorator_func)
+        # we need to mark the prompt template somehow... keeping just the reference doesn't work since pydantic is creating copy of it when passed to the constructor
+        # that is why we add special field __template_name__ into it... also skipping setattr() since that might be blocked by pydantic as well (depending on the configuration)
+        prompt_template.__dict__["__template_name__"]=template_name
+
+        PromptWatch.prompt_template_register_cache[template_name] = converted_template
+        return prompt_template
 
 
 
@@ -479,7 +474,45 @@ def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
                 return (ChatMessage(role=role,text=msg.content))
         elif isinstance(msg, list):
             return [convert_chat_messages(msg) for msg in msg]
+        else:
+            raise ValueError("msg must be either BaseMessage or List[BaseMessage]")
         
+def reconstruct_langchain_chat_messages( msg:Union[ChatMessage, List[ChatMessage]]):
+        if isinstance(msg, ChatMessage):
+                if msg.role=="user":
+                    return HumanMessage( content=msg.text)
+                    
+                elif msg.role=="assistant":
+                    return AIMessage( content=msg.text)
+                    
+                elif msg.role=="system":
+                    return SystemMessage( content=msg.text)
+                    
+                else:    
+                    return (LangChainChatMessage(role=msg.role,content=msg.text))
+        elif isinstance(msg, list):
+            return [reconstruct_langchain_chat_messages(msg) for msg in msg]
+        else:
+            raise ValueError("msg must be either ChatMessage or List[ChatMessage]")
+        
+def serialize_chain_inputs(inputs:dict):
+    res = {}
+    for k,v in inputs.items():
+        if isinstance(v, BaseMessage):
+            res[k]=convert_chat_messages(v)
+        elif isinstance(v, dict):
+            res[k]=serialize_chain_inputs(v)
+        elif isinstance(v, list):
+            if v:
+                if isinstance(v[0], BaseMessage):
+                    res[k]=convert_chat_messages(v)
+                elif isinstance(v[0], dict):
+                    res[k]=[serialize_chain_inputs(item) for item in v]
+                else:
+                    res[k]=v
+        else:
+            res[k]=v
+    return res
 
 def create_prompt_template_description( langchain_prompt_template:BasePromptTemplate, template_name:str = None, template_version:str=None)->Union[PromptTemplateDescription,NamedPromptTemplateDescription, None ]:
         
@@ -538,233 +571,3 @@ def create_prompt_template_description( langchain_prompt_template:BasePromptTemp
             return PromptTemplateDescription(prompt_template=prompt_template, prompt_input_params=input_params, format=format)
 
 
-
-def register_prompt_template(template_name:str,prompt_template, version:Optional[str]=None):
-        """
-        Register prompt template into context for more detailed tracking, versioning and evaluation
-
-
-        Args:
-            template_name (str): arbitrary unique template name (should not contain white spaces, max 126 chars)
-            prompt_template (Union[BasePromptTemplate,BaseChatPromptTemplate]): Any langchain prompt template
-            version (Optional[str], optional): Optional - (major) (SemVer) version of the template. Minor changes are tracked incrementally automatically. Useful if you are going to make a major change in the template, and you with to dive the version a distinct version number.
-
-        ## Examples:
-        
-        ### Registering regular prompt (completion)
-
-        ```
-        from promptwatch import PromptWatch
-        from langchain import OpenAI, LLMChain, PromptTemplate
-
-        prompt_template = PromptTemplate.from_template("Finish this sentence {input}")
-        my_chain = LLMChain(llm=OpenAI(), prompt=prompt_template)
-
-        with PromptWatch() as pw:
-            pw.register_prompt_template("simple_completion_template",prompt_template, version="1.0")
-            my_chain("The quick brown fox jumped over")
-        ```
-
-        ### Registering chat messages template (completion)
-        ...
-
-        """
-        if not template_name:
-            raise Exception("template_name can't be empty")
-        if re.search(r"\s", template_name):
-            raise Exception("template_name can't contain white spaces")
-        if len(template_name)>126:
-            raise Exception("template_name must be less than 126 characters")
-        
-        #TODO: hardcoded langchain_callback_handler
-        converted_template =  create_prompt_template_description(prompt_template, template_name=template_name, template_version=version)
-        from ..decorators import format_prompt_decorator
-        decorator_func = format_prompt_decorator(template_name)
-        
-        
-        wrap_a_method(prompt_template, "format_prompt", decorator_func)
-        # we need to mark the prompt template somehow... keeping just the reference doesn't work since pydantic is creating copy of it when passed to the constructor
-        # that is why we add special field __template_name__ into it... also skipping setattr() since that might be blocked by pydantic as well (depending on the configuration)
-        prompt_template.__dict__["__template_name__"]=template_name
-
-        PromptWatch.prompt_template_register_cache[template_name] = converted_template
-
-
-
-
-class CachedLLM(LLM):
-    """Cached LLM wrapper around the actual LLM."""
-    inner_llm:Any
-    cache_namespace_key:Optional[str]
-    cache_embeddings:Optional[Embeddings]
-    token_limit:Optional[int]
-    similarity_limit:Optional[float]
-
-       
-    def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
-        super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
-       
-    @property
-    def _llm_type(self) -> str:
-        """Return type of llm."""
-        return "cached-llm"
-    
-    
-    
-    def _get_from_cache(self,prompt, stop: Optional[List[str]] = None):
-        promptwatch_context = PromptWatch.get_active_instance()
-
-        
-        if promptwatch_context:
-            
-            embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
-            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
-            
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
-            cached_res = cache.get(cache_prompt_req)
-           
-           
-            return  cached_res, lambda cached_res,result : cache.add(cached_res, result) if cached_res is not None else None
-        else:
-            return None, None
-        
-    def _call(self, prompt:str, stop: Optional[List[str]] = None) -> str:
-        """ Implementing abstract call method."""
-        return self.generate([prompt], stop=stop).generations[0][0].text
-    
-      
-        
-    def _generate(
-        self, prompts: List[str], stop: Optional[List[str]] = None
-    ) -> LLMResult:
-        if prompts and len(prompts)==1:
-            # we do not support multiple prompts for now
-
-            cached_res,callback=self._get_from_cache(prompts[0], stop=stop)
-        
-            if not cached_res:
-
-                llmresult:ChatResult = self.inner_llm._generate(prompts, stop) 
-                if callback:
-                    callback(cached_res, llmresult.generations[0][0].text)
-                return llmresult
-            else:
-                generation = Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata,  "cache_namespace_key":cached_res.cache_namespace_key})
-                return LLMResult(generations=[[generation]], llm_output={"cached":True})
-            
-        else:
-            return self.inner_llm._generate(prompts, stop) 
-        
-    async def _agenerate(self, 
-                         prompts: List[str], stop: Optional[List[str]] = None
-        ) -> LLMResult:
-        if prompts and len(prompts)==1:
-            cached_res,callback=self._get_from_cache(prompts[0], stop=stop)
-            
-            if not cached_res:
-
-                chat_result:ChatResult = await self.inner_llm._agenerate(prompts, stop) 
-                if callback:
-                    callback(cached_res, chat_result.generations[0].text)
-                return chat_result
-            else:
-                generation = Generation(text=cached_res.result, generation_info={"cached":True, **cached_res.metadata,  "cache_namespace_key":cached_res.cache_namespace_key})
-                return LLMResult(generations=[[generation]], llm_output={"cached":True})
-        else:
-            return self.inner_llm._generate(prompts, stop) 
-
-
-class CachedChatLLM(BaseChatModel):
-    
-    inner_llm:Any
-    cache_namespace_key:Optional[str]
-    cache_embeddings:Optional[Embeddings]
-    token_limit:Optional[int]
-    similarity_limit:Optional[float]
-    def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
-        
-        super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
-       
-    @property
-    def _llm_type(self) -> str:
-        """Return type of llm."""
-        return "cached-chat-llm"
-    
-    def generate_prompt(
-        self, prompts: List[PromptValue], stop: Optional[List[str]] = None, **kwargs
-    ) -> LLMResult:
-        # overriding generate_prompt because we want to pass down the prompts to the inner llm
-        promptwatch_context = PromptWatch.get_active_instance()
-        if promptwatch_context and len(prompts)==1 :
-            promptwatch_context.add_context(FORMATTED_PROMPT_CONTEXT_KEY, prompts[0])
-        return super().generate_prompt(prompts, stop=stop)
-        
-    
-    def _get_from_cache(self, messages: Union[str, List[BaseMessage]], stop: Optional[List[str]] = None):
-        promptwatch_context = PromptWatch.get_active_instance()
-        prompt = ChatPromptValue(messages=messages).to_string()
-        
-        if promptwatch_context:
-            
-            embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
-            cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
-            
-            cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
-            cached_res = cache.get(cache_prompt_req)
-           
-           
-            return  cached_res, lambda cached_res,result : cache.add(cached_res, result) 
-        else:
-            return None, None
-        
-    def _call(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> str:
-        """ Implementing abstract call method."""
-        return self._generate(messages, stop=stop).generations[0].message
-    
-        
-        
-    async def _acall(self, messages: List[BaseMessage], stop: Optional[List[str]] = None) -> str:
-        """ Implementing abstract call method."""
-        return (await self._agenerate(messages, stop=stop)).generations[0].message
-        
-    async def _agenerate(
-       self, messages: List[BaseMessage], stop: Optional[List[str]] = None,**kwargs
-    ):
-        cached_res,callback=self._get_from_cache(messages, stop=stop)
-        
-        if not cached_res:
-
-            chat_result:ChatResult = await self.inner_llm._agenerate(messages, stop, **kwargs) 
-            if callback:
-                callback(cached_res, chat_result.generations[0].text)
-            return chat_result
-        else:
-            generated_msg = AIMessage(content=cached_res.result)
-            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata, "cache_namespace_key":cached_res.cache_namespace_key})
-            return ChatResult(generations=[generation],llm_output={"cached":True})
-
-        
-    def _generate(
-        self, messages: List[BaseMessage], stop: Optional[List[str]] = None,**kwargs
-    ) -> ChatResult:
-        cached_res,callback=self._get_from_cache(messages, stop=stop)
-        
-        
-        if not cached_res:
-
-
-            chat_result:ChatResult = self.inner_llm._generate(messages, stop,**kwargs) 
-            if callback:
-                callback(cached_res, chat_result.generations[0].text)
-            return chat_result
-        else:
-            generated_msg = AIMessage(content=cached_res.result)
-            generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata, "cache_namespace_key":cached_res.cache_namespace_key})
-            return ChatResult(generations=[generation],llm_output={"cached":True})
-    
-    def _combine_llm_outputs(self, llm_outputs: List[Optional[dict]]) -> dict:
-        """Combine llm outputs."""
-        if llm_outputs and len(llm_outputs)==1 and llm_outputs[0].get("cached"):
-            return llm_outputs[0]
-        else:
-            return self.inner_llm._combine_llm_outputs(llm_outputs)

@@ -2,19 +2,20 @@
 from __future__ import annotations
 import base64
 import threading
-from typing import Any, Dict, Optional,List, Union, Tuple
+from typing import Any, Dict, Optional,List, Union, Tuple, Callable,Any
 import datetime
 import os
 import re
 from .data_model import (ActivityBase, Log, Session)
 import logging
 from .data_model import Session, ActivityBase,  ChainSequence, Log, Answer, Action, Question, RetrievedDocuments, DocumentSnippet
-from .client import Client
 from uuid import uuid4
 import types
 from .utils import wrap_a_method, classproperty
 from .caching import PromptWatchCacheManager
+from .constants import EnvVariables
 from abc import ABCMeta
+
 
 
 class ContextTrackerSingleton(ABCMeta,type):
@@ -23,22 +24,46 @@ class ContextTrackerSingleton(ABCMeta,type):
     """
 
     _thread_local = threading.local()
+    _cross_thread_storage = {}
 
     def __call__(cls, *args, **kwargs):
         """Call method for the singleton metaclass."""
         if not hasattr(ContextTrackerSingleton._thread_local, "_instance"):
-            ContextTrackerSingleton._thread_local._instance = super(ContextTrackerSingleton, cls).__call__(*args, **kwargs)
+            prompt_watch_context = super(ContextTrackerSingleton, cls).__call__(*args, **kwargs)
+            if not prompt_watch_context.session_id:
+                raise Exception("PromptWatch: Session ID was not initialized. Please report this as a bug.")
+            ContextTrackerSingleton._cross_thread_storage[prompt_watch_context.session_id] = prompt_watch_context
+            ContextTrackerSingleton._thread_local._instance = prompt_watch_context
        
         return ContextTrackerSingleton._thread_local._instance 
         
-    def get_current():
+    def get_current(session_id:str=None):
+        """ return the current instance
+        for sync context session_id is not required
+        for async context session_id is required, otherwise it the instance wont be found
+        """
         if hasattr(ContextTrackerSingleton._thread_local, "_instance"):
-            return ContextTrackerSingleton._thread_local._instance
+            # in thread context ... this will work unless async is used... then we loose track...
+            # it is OK for nesting context in single thread...
+            current_instance = ContextTrackerSingleton._thread_local._instance
+            if current_instance and session_id and current_instance.session_id != session_id:
+                logging.warn(f"PromptWatch: Session ID {session_id} is not the same as the current session ID {current_instance.session_id}.  Please report this as a bug, ignoring the current context.")
+            else:
+                return current_instance
+        
+        # in async context... we need to use cross thread storage    
+        if session_id and ContextTrackerSingleton._cross_thread_storage.get(session_id):
+            current_session_context =  ContextTrackerSingleton._cross_thread_storage[session_id]
+            # also introduce it to the thread local storage
+            ContextTrackerSingleton._thread_local._instance = current_session_context
+            return current_session_context
         else:
             return None
 
-
+    @classmethod
     def remove_active_instance(cls):
+        session_id = ContextTrackerSingleton._thread_local._instance.session_id
+        del ContextTrackerSingleton._cross_thread_storage[session_id]
         del ContextTrackerSingleton._thread_local._instance 
 
 class PromptWatch(metaclass=ContextTrackerSingleton):
@@ -66,10 +91,10 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.logger = logging.getLogger("PromptWatch")
         self.session_id = session_id
         self.tracking_project=tracking_project
-        self.tracking_tenant=tracking_tenant
+        self.tracking_tenant=tracking_tenant or os.environ.get(EnvVariables.PROMPTWATCH_TRACKING_PROJECT)
 
         if not api_key:
-            api_key=os.environ.get("PROMPTWATCH_API_KEY")
+            api_key=os.environ.get(EnvVariables.PROMPTWATCH_API_KEY)
         if not api_key:
             raise Exception("Unable to find PromptWatch API key. Either set api key as a parameter to PromptWatch(api_key='<your api key>') or set it up as an env. variable PROMPTWATCH_API_KEY. You can generate your API key here: https://app.promptwatch.io/get-api-key")
         else:
@@ -84,9 +109,13 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
                 print(f"Visit the the detail of this session at https://www.promptwatch.io/sessions?temp-api-key={api_key} {RESET}")
                 
 
-
+        from .client import Client
         self.client = Client(api_key=api_key)
         
+        # assign session_id if not provided
+        # we will used to track the session across multiple threads
+        if not self.session_id:
+            self.session_id = str(uuid4())
         
         self.chain_hierarchy:List[ChainSequence]=[]
         self.pending_session_save=True
@@ -96,6 +125,11 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.context={}
         self._cache_manager = PromptWatchCacheManager(self)
         self.tracing_handlers={}
+        self.session_entered=False
+
+        #event handlers that lasts only
+        self.on_activity_event_handlers=[]
+        
 
     @property
     def caching(self):
@@ -114,7 +148,6 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
 
     def __enter__(self):
         
-
         if not self.tracing_handlers:
             # lets enable tracing by default
             self.langchain.init_tracing()
@@ -122,6 +155,7 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
 
         if not self.current_session:
             self.start_session()
+        
         
         
 
@@ -132,10 +166,19 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
             self.finish_session()
         except Exception as ex:
             self.logger.warn(f"Failed to persist the session: {ex}")
+        # we will clear the handlers because we don't want to keep them in memory since PromptWatch is a singleton and lives for the whole app lifecycle
+        self.on_activity_event_handlers.clear()
 
-       
+    
+    def add_on_activity_callback(self, event_handler: Callable[[ActivityBase],Any]):
+        if event_handler not in self.on_activity_event_handlers:
+            self.on_activity_event_handlers.append(event_handler)
 
-
+    def set_session_name(self, name:str):
+        if self.current_session:
+            self.current_session.session_name=name
+        else:
+            raise Exception("No active session. Please call this method inside PromptWatch context")
 
     @classmethod
     def get_current_session(cls) -> Session:
@@ -305,6 +348,13 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
                 activity.parent_activity_id=self.current_activity.id
             else:
                 activity.parent_activity_id=self.current_activity.parent_activity_id
+
+        for handler in self.on_activity_event_handlers:
+            try:
+                handler(activity)
+            except Exception as ex:
+                self.logger.exception(f"Failed to execute on_activity_event_handlers handler {handler.__name__}: {ex}")
+
         self.pending_stack.append(activity)
         
         
@@ -318,7 +368,12 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
             closing_chain.end_time = datetime.datetime.now(tz=datetime.timezone.utc)
             if closing_chain not in self.pending_stack:
                 self.pending_stack.append(closing_chain)
-        
+                
+        for handler in self.on_activity_event_handlers:
+            try:
+                handler(closing_chain)
+            except Exception as ex:
+                self.logger.exception(f"Failed to execute on_activity_event_handlers handler {handler.__name__}: {ex}")
         self._flush_stack()
 
     def _flush_stack(self):
@@ -340,7 +395,9 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
 
 
     def start_session(self):
-        self.current_session=Session(start_time=datetime.datetime.now(tz=datetime.timezone.utc), tracking_project=self.tracking_project, tracking_tenant=self.tracking_tenant)
+        if self.current_session:
+            raise Exception("Session already started. Do not open PromptWatch context twice (probably nested with PromptWatch: ... calls)")
+        self.current_session=Session(id=self.session_id, start_time=datetime.datetime.now(tz=datetime.timezone.utc), tracking_project=self.tracking_project, tracking_tenant=self.tracking_tenant)
         self.logger.info(f"Starting PromptWatch session: {self.current_session.id}")
         self.current_session.start_time=self.current_session.start_time or datetime.datetime.now(tz=datetime.timezone.utc)
         self.pending_session_save=True
@@ -355,6 +412,7 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         if self.current_session.steps_count:
             self.client.finish_session(self.current_session)
         ContextTrackerSingleton.remove_active_instance()
+        self.current_session=None
 
     def _on_error(self, error, kwargs):
         self.current_activity.error=str(error)

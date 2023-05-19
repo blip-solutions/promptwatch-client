@@ -274,7 +274,7 @@ class RemoteImpl(CacheImplBase):
         self.client.add_into_cache(self.cache_namespace_key, str(prompt_hash), prompt_embedding, result)
 
     def clear(self):
-        self.client.clear(self.cache_namespace_key)
+        self.client.clear_cache(self.cache_namespace_key)
 
 
 def num_tokens_from_string(string: str, encoding_name: str="cl100k_base") -> int:
