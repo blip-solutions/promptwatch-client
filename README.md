@@ -31,88 +31,50 @@ Here you can get your API key: http://www.promptwatch.io/get-api-key (no registr
 
 You can set it directly into `PromptWatch` constructor, or set is as an *ENV variable* `PROMPTWATCH_API_KEY`
 
-### Project and Tenant costs tracking
+## Comprehensive Chain Execution Tracking
 
-You can assign a **project** and **tenant** id to your session by setting the constructor parameter:
+With PromptWatch.io, you can track all chains, actions, retrieved documents, and more to gain complete visibility into your system. This makes it easy to identify issues with your prompts and quickly fix them for optimal performance.
 
-This will allow you to track costs per OpenAI request per customer and as well as your dev project.
+What sets PromptWatch.io apart is its intuitive and visual interface. You can easily drill down into the chains to find the root cause of any problems and get a clear understanding of what's happening in your system.
 
-```python
+![](https://docs.promptwatch.io/assets/images/sessions_optimized.gif)
 
-...
+Read more here:
+[Chain tracing documentation](https://docs.promptwatch.io/docs/category/chain-tracing)
 
-with PromptWatch(tracking_project="my-project", tracking_tenant="my-tenant",) as pw:
-    my_chain("The quick brown fox jumped over")
+## LLM Prompt caching
+It is often tha case that some of the prompts are repeated over an over. It is costly and slow. 
+With PromptWatch you just wrap your LLM model into our CachedLLM interface and it will automatically reuse previously generated values.
 
-```
-### What is being tracked
+Read more here:
+[Prompt caching documentation](https://docs.promptwatch.io/docs/caching)
 
-PromptWatch tracks all the details that LangChain exposes via its tracking "API" and more.
+## LLM Prompt Template Tweaking
 
-👉 Chain execution inputs, outputs, execution time
+Tweaking prompt templates to find the optimal variation can be a time-consuming and challenging process, especially when dealing with multi-stage LLM chains. Fortunately, PromptWatch.io can help simplify the process!
 
-👉 Tools input output
+With PromptWatch.io, you can easily experiment with different prompt variants by replaying any given LLM chain with the exact same inputs used in real scenarios. This allows you to fine-tune your prompts until you find the variation that works best for your needs.
 
-👉 **retrieved documents from retrieval vector DB**
+![](https://docs.promptwatch.io/assets/images/prompt_templates_optmized.gif)
 
-👉 Details about LLM runs like:
-
-  - final prompt text
-  - generated text
-  - execution details like model, temperature, etc. (everything you need to re-run the prompt with the same exact setup)
-  - total used tokens
-  - **costs (based on OpenAI price list per model)**
-  - **prompt template and its parameters**
-  
- 
-
-### Custom logging
-
-PromptWatch tracks quite extensively standard LangChain tools, but if you have some custom code you'd like to track you can do so.
-
-```python
-...
-with PromptWatch(api_key=invalid_api_key):
-    PromptWatch.log_activity(Question(text="What did the president say about Ketanji Brown Jackson"))
-    PromptWatch.log("my arbitrary log message")
-```
-
-All the logs are associated with to opened session. You can't log outside the session.
-
-```python
-...
-with PromptWatch(api_key=invalid_api_key):
-    PromptWatch.log_activity(Question(text="What did the president say about Ketanji Brown Jackson"))
-    #end of session   
-PromptWatch.log("this will raise an exception!")
-```
+Read more here:
+[Prompt tweaking documentation](https://docs.promptwatch.io/docs/prompt_tweaking)
 
 
-## Prompt template tracking
+## Keep Track of Your Prompt Template Changes
 
-You can register any LangChain prompt template for detailed monitoring
+Making changes to your prompt templates can be a delicate process, and it's not always easy to know what impact those changes will have on your system. Version control platforms like GIT are great for tracking code changes, but they're not always the best solution for tracking prompt changes.
 
-```python
-from promptwatch import PromptWatch, register_prompt_template
-from langchain import OpenAI, LLMChain, PromptTemplate
+![](https://docs.promptwatch.io/assets/images/prompt_templates_optmized.gif)
 
-prompt_template = PromptTemplate.from_template("Finish this sentence {input}")
-my_chain = LLMChain(llm=OpenAI(), prompt=prompt_template)
-
-register_prompt_template("your_template_name",prompt_template) 
-
-with PromptWatch() as pw:
-    
-    #execute the chain
-    my_chain("The quick brown fox jumped over")
-
-```
-
-This will allow you to associate the prompt template with a custom name (and function) and track it independently... 
-
-Any change of that template text will cause an automatic version change (with automatic version number increment)
-
-**Warning**
-The registration just assigns the template a custom name and is only done when the LLM actually executes the LLM prompt with that template. Therefore is has no additional performance costs, on the contrary it can even speed up the execution a bit if the same template is used multiple times.
+Read more here:
+[Prompt template versioning documentation](https://docs.promptwatch.io/docs/prompt_template_versioning)
 
 
+
+## Unit testing
+Unit tests will help you understand what impact your changes in Prompt templates and your code can have on representative sessions examples.
+
+![](https://docs.promptwatch.io/assets/images/unit_tests.png)
+Read more here:
+[Unit tests documentation](https://docs.promptwatch.io/docs/category/unit-testing)
