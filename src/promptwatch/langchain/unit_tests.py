@@ -19,14 +19,21 @@ from langchain.chat_models.base import BaseChatModel
 def convert_inputs(inputs: dict) -> dict:
         res = {}
         for k,v in inputs.items():
-            if isinstance(v,list):
+            if isinstance(v,list) and v:
                 # if it is a list, it is likely a list of messages for history
-                try:
-                    # let's try to parse it as a list of messages
-                    promptwatch_chat_msgs = [ChatMessage.parse_obj(m) for m in v]
+                if isinstance(v[0], list) and len(v[0])==2:
+                    # if it is a list of lists, it is likely a list of messages for history.. 
+                    # but we need to convert it to a list tuples
+                    res[k]=[(m[0],m[1]) for m in v]
+                elif isinstance(v[0], dict) and "text" in v[0] and "role" in v[0]:
+                    try:
+                        # let's try to parse it as a list of messages
+                        promptwatch_chat_msgs = [ChatMessage.parse_obj(m) for m in v]
 
-                    res[k]=reconstruct_langchain_chat_messages(promptwatch_chat_msgs)
-                except:
+                        res[k]=reconstruct_langchain_chat_messages(promptwatch_chat_msgs)
+                    except:
+                        res[k]=v
+                else:
                     res[k]=v
             else:
                 res[k]=v
@@ -49,6 +56,14 @@ class TestCaseMemory(BaseMemory):
         res = convert_inputs(self.unit_test_session._pending_test_case.inputs)
         if self.memory_key not in res:
             res[self.memory_key] = []
+            # tst if some other name for history is in the inputs
+            memory_key_candidates = [k for k in inputs.keys() if "history" in k.lower() or "memory" in k.lower()]
+            if memory_key_candidates:
+                print(f"Warning: default memory_key={self.memory_key} is not in the inputs, but some {','.join(memory_key_candidates)} is. Isn't it a mistake? ")
+                print("Please set the memory_key as a parameter when creating the TestCaseMemory object.")
+        
+
+
         return res
 
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, str]) -> None:
