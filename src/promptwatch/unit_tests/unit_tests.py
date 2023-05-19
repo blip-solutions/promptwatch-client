@@ -2,6 +2,7 @@ import json
 import os
 from typing import *
 from promptwatch.constants import EnvVariables
+from promptwatch.promptwatch_context import PromptWatch
 from promptwatch.data_model import NamedPromptTemplateDescription,ActivityBase, LlmPrompt, ChainSequence
 from .schema import *
 from .evaluation import DEFAULT_COSINE_SCORE_EVALUATION, TestCaseEvaluationWrapper, EvaluationStrategyBase
@@ -21,12 +22,13 @@ class UnitTest:
         self.evaluation_strategy=evaluation
         self._entered=False
         #avoiding circular imports
-        from promptwatch import PromptWatch
+        
         # it ok to create new instance... PromptWatch is a singleton and if someone want's to initialize extra params, he can wrapping it int  PromptWatch context 
-        self.prompt_watch=PromptWatch()
+        self.prompt_watch=None 
         self.conditions=None
         self.test_cases_generator=None
-        self.client=self.prompt_watch.client
+        from promptwatch.client import Client
+        self.client=Client()
 
         self.evaluator=None
         
@@ -122,6 +124,8 @@ class UnitTest:
         self._entered=True
         if not self.test_cases_generator:
             raise Exception("Invalid use. Please define the scope of test by calling one of for_test_cases, for_test_cases_in_file, for_prompt_template or for_project_sessions methods before entering the context")
+        
+        self.prompt_watch=PromptWatch(tracking_project=self.conditions.for_tracking_project if self.conditions else None)
         self.prompt_watch.__enter__()
         self.prompt_watch.session_id
         self.unit_test_run = PromptUnitTestRun(
@@ -297,7 +301,7 @@ class UnitTestSession:
 
             print(f"  Total Processed: {MAGENTA}{self.unit_test_run.results.total_processed}{RESET}")
             print(f"  Passed: {GREEN if self.unit_test_run.results.passed else MAGENTA }{self.unit_test_run.results.passed}{RESET}")
-            print(f"  Failed: {RED  if self.unit_test_run.results.passed else MAGENTA }{self.unit_test_run.results.failed}{RESET}")
+            print(f"  Failed: {RED  if self.unit_test_run.results.failed else MAGENTA }{self.unit_test_run.results.failed}{RESET}")
         print("--------------")
         link_url = f"https://www.promptwatch.io/unit-tests?unit-test-run={self.unit_test_run.run_id}"
         print(f"{MAGENTA}You can see the full results here: {link_url}{RESET}")
