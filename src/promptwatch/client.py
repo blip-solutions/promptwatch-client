@@ -10,7 +10,7 @@ from pydantic.json import pydantic_encoder
 
 class Client:
 
-    def __init__(self, api_key:str) -> None:
+    def __init__(self, api_key:str=None) -> None:
         if not api_key:
             api_key=os.environ.get("PROMPTWATCH_API_KEY")
         if not api_key:
