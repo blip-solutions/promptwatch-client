@@ -188,6 +188,7 @@ class TestCaseEvaluationWrapper:
         self.inner_test_case=test_case
         self.llm_prompt=None
         self.activity_id=None
+        self.iterations=0
         
         
         
@@ -225,8 +226,26 @@ class TestCaseEvaluationWrapper:
         ```
         
         """
+        if self.iterations==0:
+            # sanity checks
+            try:
+                from langchain import LLMChain
+                if self.unit_test_session.unit_test_run.conditions and self.unit_test_session.unit_test_run.conditions.for_template_name:
+                    # if we are running test for template, we expect to evaluate llm_chain.run method, not the instance itself
+                    if isinstance(result_generator, LLMChain):
+                        result_generator=result_generator.run
+                    
+            except ImportError as e:
+                # we ignore error if langchain cant be imported
+                pass
+
+
         try:
             generated = result_generator(self.inputs)
+            if self.unit_test_session.unit_test_run.conditions and self.unit_test_session.unit_test_run.conditions.for_template_name and not isinstance(generated, str):
+                raise Exception(f"we expect that the evaluated method/object to return a string for 'for_template_name' unit test, but got: {type(generated)}")
+                
+
             if hasattr(result_generator,"output_keys") and isinstance(generated,dict):
                 # langchain chains have input / output_keys and also options for return more than output. (return intermediate results, return only outputs etc.)
                 # we want to compare ONLY outputs
@@ -236,9 +255,16 @@ class TestCaseEvaluationWrapper:
 
             self.evaluate_result(generated)
         except Exception as e:
+                
             self.mark_as_failed(str(e))
+            if "Missing some input keys:" in str(e):
+                # this is likely due to missing test memory...
+                raise Exception(f"Got exception {str(e)}. \nThis is likely due to missing test memory. Please see: docs.promptwatch.com/docs/unit_testing/unit_tests_reference_guide#langchain-test-memory")
+            
             if not continue_on_error:
                 raise e
+            
+        self.iterations+=1
 
     def skip(self):
         self.unit_test_session.skip()

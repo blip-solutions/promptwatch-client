@@ -31,7 +31,10 @@
 - fixed nesting context problem
 - disabled exception on get cache that has not been initialized (reinitializing instead)
 
-## Version 0.1.0 (2023-05-15)
+## Version 0.1.0 (2023-05-19)
 - introduction of UnitTests
 - support for initialization of tracking_project from PROMPTWATCH_TRACKING_PROJECT Env variable
 - refactoring of the file structure
+
+## Version 0.1.1 (2023-05-19)
+- add some sanity checks for common mistakes
