@@ -151,6 +151,11 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         formatted_prompt=None
 
         current_llm_chain:LLMChain= self.prompt_watch.get_context(LLM_CHAIN_CONTEXT_KEY)
+
+        template_name = self.prompt_watch.get_context(TEMPLATE_NAME_CONTEXT_KEY)
+        if template_name:
+            prompt_template = PromptWatch.prompt_template_register_cache.get(template_name)
+            
         # this should ensure that all the additional data is available in the context
         if current_llm_chain:
             if current_llm_chain.llm and current_llm_chain.llm.dict:
@@ -160,9 +165,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                 llm_info = {k:v for k,v in llm.dict().items() if is_primitive_type(v)}
                 llm_info["stop"] = self.prompt_watch.current_activity.inputs.get("stop")
             # lets try to retrieve registered named template first... it's faster
-            template_name = self.prompt_watch.get_context(TEMPLATE_NAME_CONTEXT_KEY)
-            if template_name:
-                prompt_template = PromptWatch.prompt_template_register_cache.get(template_name)
+            
 
             if not prompt_template:
                 # lets create anonymous prompt template description
@@ -274,7 +277,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     ) -> Any:
         """Run when chain starts running."""
         
-        if serialized.get("name").startswith("LLM") :
+        if "LLM" in serialized.get("name") :
             current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
             self.prompt_watch.add_context(LLM_CHAIN_CONTEXT_KEY,current_llm_chain)
 

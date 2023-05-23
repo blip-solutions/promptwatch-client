@@ -21,7 +21,7 @@ def format_prompt_decorator(template_name:str):
                 _self=args[0]
                 pw.add_context(FORMATTED_PROMPT_CONTEXT_KEY, result)
                 pw.add_context(TEMPLATE_NAME_CONTEXT_KEY, template_name)
-                if isinstance(pw.current_activity,ChainSequence) and pw.current_activity.sequence_type=="LLMChain":
+                if isinstance(pw.current_activity,ChainSequence):
                     llm_chain = find_the_caller_in_the_stack(type=LLMChain)
                     if llm_chain:
                         pw.add_context(LLM_CHAIN_CONTEXT_KEY, llm_chain)  
