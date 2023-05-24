@@ -6,7 +6,7 @@ def find_the_caller_in_the_stack(name:str=None, type:type = None):
             caller_locals = caller_frame.f_locals
             caller_instance = caller_locals.get("self", None)
 
-            if name==caller_instance.__class__.__name__ or isinstance(caller_instance, type):
+            if (name and name==caller_instance.__class__.__name__) or (type and isinstance(caller_instance, type)):
                 return caller_instance
             caller_frame = caller_frame.f_back
 
