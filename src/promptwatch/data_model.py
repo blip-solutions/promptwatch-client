@@ -175,7 +175,7 @@ class ChatMessagePromptTemplate(PromptTemplateDescription):
     
     
 class NamedPromptTemplateDescription(PromptTemplateDescription):
-    template_name:Optional[str]
+    template_name:str
     template_version:Optional[str]
 
     

@@ -10,6 +10,8 @@ from langchain.embeddings.base import Embeddings
 from langchain.schema import AIMessage, BaseMessage, ChatGeneration, ChatResult
 from langchain.schema import PromptValue
 from langchain.schema import LLMResult
+
+from ..data_model import LlmPrompt, NamedPromptTemplateDescription
 from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY
 from typing import List
 from .. import PromptWatch
@@ -49,14 +51,20 @@ class CachedLLM(LLM):
     def _get_from_cache(self,prompt, stop: Optional[List[str]] = None):
         promptwatch_context = PromptWatch.get_active_instance()
 
-        
         if promptwatch_context:
-            
+
+            if isinstance(promptwatch_context.current_activity,LlmPrompt) and isinstance(promptwatch_context.current_activity.prompt_template, NamedPromptTemplateDescription):
+                prompt_input_values = promptwatch_context.current_activity.prompt_input_values
+                named_prompt_template = promptwatch_context.current_activity.prompt_template
+            else:
+                prompt_input_values=None
+                named_prompt_template=None
+
             embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
             
             cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
-            cached_res = cache.get(cache_prompt_req)
+            cached_res = cache.get(cache_prompt_req, prompt_template=named_prompt_template, prompt_input_values=prompt_input_values)
            
            
             return  cached_res, lambda cached_res,result : cache.add(cached_res, result) if cached_res is not None else None
@@ -144,8 +152,20 @@ class CachedChatLLM(BaseChatModel):
             embed_func = self.cache_embeddings.embed_query if self.cache_embeddings else None
             cache = promptwatch_context.caching.get_or_init_cache(self.cache_namespace_key, embed_func, self.token_limit, self.similarity_limit)
             
+            
+            if isinstance(promptwatch_context.current_activity,LlmPrompt) \
+                and isinstance(promptwatch_context.current_activity.prompt_template, NamedPromptTemplateDescription) \
+                and promptwatch_context.current_activity.prompt_template.template_name:
+                    
+                named_prompt_template = promptwatch_context.current_activity.prompt_template
+                prompt_input_values = promptwatch_context.current_activity.prompt_input_values
+            else:
+                prompt_input_values=None
+                named_prompt_template=None
+
+
             cache_prompt_req = f"Stop:[{','.join(stop)}]\n:{prompt}" if stop else prompt
-            cached_res = cache.get(cache_prompt_req)
+            cached_res = cache.get(cache_prompt_req,prompt_template=named_prompt_template, prompt_input_values=prompt_input_values )
            
            
             return  cached_res, lambda cached_res,result : cache.add(cached_res, result) 

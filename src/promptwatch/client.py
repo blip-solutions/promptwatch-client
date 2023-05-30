@@ -1,6 +1,6 @@
 from .data_model import Session, ActivityBase, ActivityList
 import requests
-from typing import List, Optional,Tuple
+from typing import Dict, List, Optional,Tuple
 import os
 import logging
 from datetime import datetime
@@ -68,8 +68,14 @@ class Client:
             raise Exception(f"Error response from server: {response.status_code}: {response.text}")
         
 
-    def get_from_cache(self, cache_namespace_key:str,  query_embedding:List[float], min_similarity:float)-> Tuple[str,float]:
-        response = self._request("POST", f"/prompt-cache/{cache_namespace_key}/get", json_dict={"embedding":query_embedding},params={ "min_similarity":min_similarity})
+    def get_from_cache(self, cache_namespace_key:str,  query_embedding:List[float], min_similarity:float,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None)-> Tuple[str,float]:
+        response = self._request("POST", f"/prompt-cache/{cache_namespace_key}/get", 
+                                 json_dict={
+                                     "embedding":query_embedding,
+                                     "prompt_template_identity":prompt_template_identity,
+                                     "prompt_input_values":prompt_input_values,
+                                     },
+                                 params={ "min_similarity":min_similarity})
         if response:
             data = response.json()
             if data:
@@ -77,8 +83,16 @@ class Client:
                 similarity = data.get("similarity")
                 return result, similarity
         
-    def add_into_cache(self, cache_namespace_key:str, id:str, embedding:List[float], result:str):
-       response = self._request("POST", f"/prompt-cache/{cache_namespace_key}", json_dict={"embedding":embedding, "id":id,"result":result})
+    def add_into_cache(self, cache_namespace_key:str, id:str, embedding:List[float], result:str,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None):
+       response = self._request("POST", f"/prompt-cache/{cache_namespace_key}", 
+                                json_dict={
+                                     "embedding":embedding,
+                                     "prompt_template_identity":prompt_template_identity,
+                                     "prompt_input_values":prompt_input_values,
+                                     "id":id,
+                                     "result":result
+                                     }
+                                     )
     
     def clear_cache(self, cache_namespace_key:str, until:Optional[datetime]=None):
        response = self._request("POST", f"/prompt-cache/{cache_namespace_key}/clear", params={ "until":until})

@@ -1,5 +1,6 @@
 """A Tracer implementation that records to LangChain endpoint."""
 from __future__ import annotations
+from ast import Tuple
 import re
 from abc import ABC
 from typing import Any, Dict, Optional, Union
@@ -12,6 +13,9 @@ from langchain.chains import LLMChain
 from langchain.embeddings.base import Embeddings
 from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain.agents import initialize_agent, Tool, Agent, BaseSingleActionAgent
+from langchain.tools.base import BaseTool
+from langchain.chains.base import Chain
 
 from langchain.schema import AgentAction, AgentFinish, LLMResult,  Document
 from ..client import Client
@@ -410,7 +414,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
 
-def register_prompt_template(template_name:str,prompt_template, version:Optional[str]=None):
+def register_prompt_template(template_name:str,prompt_template, version:Optional[str]="1.0"):
         """
         Register prompt template into context for more detailed tracking, versioning and evaluation
 
@@ -425,14 +429,14 @@ def register_prompt_template(template_name:str,prompt_template, version:Optional
         ### Registering regular prompt (completion)
 
         ```
-        from promptwatch import PromptWatch
+        from promptwatch import PromptWatch, register_prompt_template
         from langchain import OpenAI, LLMChain, PromptTemplate
 
         prompt_template = PromptTemplate.from_template("Finish this sentence {input}")
         my_chain = LLMChain(llm=OpenAI(), prompt=prompt_template)
+        register_prompt_template("simple_completion_template",prompt_template, version="1.0")
 
-        with PromptWatch() as pw:
-            pw.register_prompt_template("simple_completion_template",prompt_template, version="1.0")
+        with PromptWatch():    
             my_chain("The quick brown fox jumped over")
         ```
 
@@ -457,9 +461,83 @@ def register_prompt_template(template_name:str,prompt_template, version:Optional
         # we need to mark the prompt template somehow... keeping just the reference doesn't work since pydantic is creating copy of it when passed to the constructor
         # that is why we add special field __template_name__ into it... also skipping setattr() since that might be blocked by pydantic as well (depending on the configuration)
         prompt_template.__dict__["__template_name__"]=template_name
+        prompt_template.__dict__["__template_version__"]=version
 
         PromptWatch.prompt_template_register_cache[template_name] = converted_template
         return prompt_template
+
+
+
+
+
+
+def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name_prefix:str, print_code=True, _ignore_chains:List[Chain]=[])-> Tuple[str,BasePromptTemplate]:
+    """This will find all templates in the chain and its subchains, agents, tools recursively. 
+    It return a tuple of (path_to_template, template)
+
+    If print_code==True, it will also print the code to register all templates
+
+
+    Args:
+        root_chain (Union[Chain,Tool, Agent]): _description_
+        template_name_prefix (str): _description_
+        print_code (bool, optional): _description_. Defaults to True.
+        _ignore_chains (List[Chain], optional): _description_. Defaults to [].
+
+
+
+    Yields:
+        Tuple(): _description_
+    """
+    for field_key, field_value in root_chain.__dict__.items():
+        if field_value is None or field_value in _ignore_chains:
+            continue
+        if isinstance(field_value,Chain):
+              _ignore_chains.append(field_value)
+              for res_pair in find_templates_recursive(field_value, f"{template_name_prefix}.{field_key}"):
+                    yield res_pair
+        elif isinstance(field_value, BaseSingleActionAgent):
+            _ignore_chains.append(field_value)
+            for res_pair in find_templates_recursive(field_value, f"{template_name_prefix}.{field_key}"):
+                yield res_pair
+        elif isinstance(field_value, list):
+            for item in field_value:
+                if isinstance(item, Chain):
+                    _ignore_chains.append(item)
+                    for res_pair in find_templates_recursive(item, f"{template_name_prefix}.{field_key}"):
+                        yield res_pair
+                if isinstance(item, BaseTool):
+                    _ignore_chains.append(item)
+                    for res_pair in find_templates_recursive(item, f"{template_name_prefix}.{field_key}"):
+                        yield res_pair
+        elif isinstance(field_value, BasePromptTemplate):
+            if field_value.__dict__.get("__template_name__") :
+                 continue
+                 raise ValueError(f"PromptTemplate {field_value} has no name")
+            if print_code:
+                print(f"register_prompt_template({template_name_prefix}.{field_key}, '{template_name_prefix}.{field_key}'")
+            yield f"{template_name_prefix}.{field_key}", field_value
+
+def find_and_register_templates_recursive(root_chain: Chain, template_name_prefix:str, ignore_subpaths=[]):
+    paths = []
+    ignore=False
+    for path, template in find_templates_recursive(root_chain, template_name_prefix, print_code=False):
+        for subpath in ignore_subpaths:
+            if subpath in path:
+                ignore=True
+        register_prompt_template(template_name=path, prompt_template=template)
+        paths.append(path)
+    print(f"Registered {len(paths)} templates: ")
+    print("\n".join(paths))
+    print("WARNING: This method is not fit for production use as it might slow down the startup time.")
+    print("         Please consider using find_and_register_templates_recursive() to generate a code to register all templates instead.")
+
+
+
+
+
+
+
 
 
 
@@ -572,5 +650,4 @@ def create_prompt_template_description( langchain_prompt_template:BasePromptTemp
             return NamedPromptTemplateDescription(prompt_template=prompt_template, prompt_input_params=input_params, format=format, template_name=template_name ,template_version=template_version)
         else:
             return PromptTemplateDescription(prompt_template=prompt_template, prompt_input_params=input_params, format=format)
-
 

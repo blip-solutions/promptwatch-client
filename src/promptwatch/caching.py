@@ -1,11 +1,19 @@
+from calendar import c
 from typing import List, Callable, Dict, Union, Tuple, TYPE_CHECKING
 from uuid import uuid5, NAMESPACE_DNS, UUID
 from abc import ABC, abstractmethod
+from .data_model import NamedPromptTemplateDescription
 import tiktoken
 import logging
 
 if TYPE_CHECKING:
     from .promptwatch_context import PromptWatch
+    
+    try:
+        from langchain import PromptTemplate
+        from langchain import BasePromptTemplate
+    except ImportError:
+        pass
 
 DEFAULT_CACHE_KEY="default"
 
@@ -23,7 +31,9 @@ class CacheResult:
     
 
 class PromptWatchCache:
-    def __init__(self, cache_namespace_key, implementation:"CacheImplBase", embed_func:Callable[[str],List[float]], token_limit, similarity_limit:float=0.97):
+    def __init__(self, cache_namespace_key, implementation:"CacheImplBase", embed_func:Callable[[str],List[float]], token_limit=512, similarity_limit:float=0.97):
+        # introducing default token limit 512 as it works the best for most models & the longer the prompt the less precise the similarity check is
+
         self.cache_namespace_key = cache_namespace_key
         self.implementation:CacheImplBase= implementation
         self.embed_func = embed_func
@@ -37,7 +47,7 @@ class PromptWatchCache:
         
 
     def test_token_limit(self, prompt:str)->bool:
-         # assuming that the average token length is way over 2 chars, it's safe to assume that if the prompt is half the token limit, we the real limit won't be reached
+         # assuming that the average token length is way over 2 chars, it's safe to assume that if the prompt is half the token limit, the real limit won't be reached
         if len(prompt)/2 <= self.token_limit:
             return True
         elif num_tokens_from_string(prompt) <= self.token_limit:
@@ -45,8 +55,8 @@ class PromptWatchCache:
         else:
             return False
         
-
-    def get(self, prompt:str)->Union[CacheResult,None]:
+    
+    def get(self, prompt:str, prompt_template:Union[ "BasePromptTemplate","NamedPromptTemplateDescription"]=None, prompt_input_values:Dict[str,str]=None, prompt_template_name:str=None, prompt_template_version:str=None)->Union[CacheResult,None]:
         """ returns cached str if found, NotFoundHandle if not found, None if prompt is too long to be cached
         
         ## Example usage:
@@ -60,7 +70,37 @@ class PromptWatchCache:
             return cache_result.result
         ```
         """
+        if prompt_template:
+            if not prompt_template_name and isinstance(prompt_template, NamedPromptTemplateDescription):
+                prompt_template_name = prompt_template.template_name
+                prompt_template_version = prompt_template.template_version
+            else:
+                try:
+                    from langchain import BasePromptTemplate
+                    if isinstance(prompt_template, BasePromptTemplate):
+                        prompt_template_name = prompt_template.__dict__.get("__template_name__")
+                        if not prompt_template_name:
+                            raise ValueError("PromptTemplate MUST be registered before using it in the cache! ...  use register_prompt_template() to register it first!")
+                        prompt_template_version = prompt_template.__dict__.get("__template_version__")
+                except ImportError:
+                    pass
+
+            
+        
+        if prompt_template_name:
+            prompt_template_identity = f"{prompt_template_name}:{prompt_template_version}"
+        else:
+            if prompt_input_values:
+                raise Exception("Invalid use. You can't use caching with prompt_input_values without specifying prompt_template")
+            prompt_template_identity = None
+            print("\033[38;5;208mWarning: Using cache without registered template. This will very likely lead to poor cache precision!\033[0m")
+            print("\033[38;5;208mSee: https://docs.promptwatch.io/docs/caching\033[0m")
         try:
+            if prompt_input_values:
+                prompt = "; ".join((f"{k}:{v}" for k,v in prompt_input_values.items()))
+            else:
+                prompt = prompt
+                
             if self.test_token_limit(prompt):
                 if isinstance(self.embed_func, EmbeddingProviderBase) and self.embed_func.should_include_token_usage:
                     prompt_embedding, token_usage = self.embed_func(prompt, True)
@@ -70,7 +110,14 @@ class PromptWatchCache:
                 else:
                     prompt_embedding = self.embed_func(prompt)
                     metadata={}
-                result, similarity = self.implementation.get(prompt_embedding,self.similarity_limit) or (None,None)
+                
+
+                result, similarity = self.implementation.get(
+                        prompt_embedding=prompt_embedding,
+                        similarity_limit=self.similarity_limit, 
+                        prompt_template_identity=prompt_template_identity, 
+                        prompt_input_values=prompt_input_values
+                    ) or (None,None)
                 if result:
                     metadata["similarity"]=similarity
                 
@@ -199,11 +246,11 @@ class CacheImplBase(ABC):
         self.cache_namespace_key = cache_namespace_key
 
     @abstractmethod
-    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97)->  Tuple[str, float]:
+    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None)->  Tuple[str, float]:
         pass
     
     @abstractmethod
-    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str):
+    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str, prompt_template_identity:str=None, input_parameters:Dict[str,str]=None)->None:
         pass
 
     @abstractmethod
@@ -232,8 +279,9 @@ class LocalImpl(CacheImplBase):
             raise ImportError("chromadb is required for local cache... please use 'pip install chromadb'")
     
 
-    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97)-> Tuple[str, float]:
-
+    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None)-> Tuple[str, float]:
+        if prompt_template_identity or prompt_input_values:
+            print("WARNING: Local cache does not support template_parameter based caching... falling back to caching the entire prompt as the default.")
         if self.has_data:
             results =  self.collection.query(query_embeddings=[prompt_embedding],n_results=1)
             docs = results["documents"]
@@ -242,7 +290,7 @@ class LocalImpl(CacheImplBase):
                 return docs[0][0], 1-distances[0][0] #return the first result, and the similarity (1-distance)
             
 
-    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str):
+    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None):
         
         self.collection.add(
             embeddings=[prompt_embedding],
@@ -266,12 +314,12 @@ class RemoteImpl(CacheImplBase):
         self.client = self.promptwatch_context.client
 
     
-    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97)->  Tuple[str, float]:
-        return self.client.get_from_cache(self.cache_namespace_key, prompt_embedding, min_similarity=similarity_limit)
+    def get(self, prompt_embedding:List[float], similarity_limit:float = 0.97,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None)->  Tuple[str, float]:
+        return self.client.get_from_cache(self.cache_namespace_key, prompt_embedding, min_similarity=similarity_limit, prompt_input_values=prompt_input_values, prompt_template_identity=prompt_template_identity)
     
     
-    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str):
-        self.client.add_into_cache(self.cache_namespace_key, str(prompt_hash), prompt_embedding, result)
+    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str,  prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None):
+        self.client.add_into_cache(self.cache_namespace_key, str(prompt_hash), embedding=prompt_embedding, result=result, prompt_input_values=prompt_input_values,prompt_template_identity=prompt_template_identity)
 
     def clear(self):
         self.client.clear_cache(self.cache_namespace_key)
