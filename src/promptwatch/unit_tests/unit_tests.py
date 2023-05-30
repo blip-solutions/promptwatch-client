@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 class UnitTest:
 
-    def __init__(self, test_name:str, evaluation:EvaluationStrategyBase=DEFAULT_COSINE_SCORE_EVALUATION) -> None:
+    def __init__(self, test_name:str, evaluation:EvaluationStrategyBase=DEFAULT_COSINE_SCORE_EVALUATION, api_key:str=None) -> None:
         """ Initialize new test definition. If called with the same parameters, it will be reused """
         self.test_name=test_name
         self.evaluation_strategy=evaluation
@@ -28,7 +28,7 @@ class UnitTest:
         self.conditions=None
         self.test_cases_generator=None
         from promptwatch.client import Client
-        self.client=Client()
+        self.client=Client(api_key=api_key)
 
         self.evaluator=None
         
@@ -125,7 +125,7 @@ class UnitTest:
         if not self.test_cases_generator:
             raise Exception("Invalid use. Please define the scope of test by calling one of for_test_cases, for_test_cases_in_file, for_prompt_template or for_project_sessions methods before entering the context")
         
-        self.prompt_watch=PromptWatch(tracking_project=self.conditions.for_tracking_project if self.conditions else None)
+        self.prompt_watch=PromptWatch(tracking_project=self.conditions.for_tracking_project if self.conditions else None, api_key=self.client.api_key)
         self.prompt_watch.__enter__()
         self.prompt_watch.session_id
         self.unit_test_run = PromptUnitTestRun(
