@@ -124,7 +124,7 @@ class CachedChatLLM(BaseChatModel):
     cache_embeddings:Optional[Embeddings]
     token_limit:Optional[int]
     similarity_limit:Optional[float]
-    def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.97) -> None:
+    def __init__(self, inner_llm:BaseLLM, cache_namespace_key:str=None, cache_embeddings:Embeddings = None, token_limit:int=None, similarity_limit:float=0.95) -> None:
         
         super().__init__(inner_llm=inner_llm, cache_namespace_key=cache_namespace_key, cache_embeddings=cache_embeddings, token_limit=token_limit, similarity_limit=similarity_limit)
        
@@ -139,7 +139,7 @@ class CachedChatLLM(BaseChatModel):
         # overriding generate_prompt because we want to pass down the prompts to the inner llm
         promptwatch_context = PromptWatch.get_active_instance()
         if promptwatch_context and len(prompts)==1 :
-            promptwatch_context.add_context(FORMATTED_PROMPT_CONTEXT_KEY, prompts[0])
+            promptwatch_context.add_context(FORMATTED_PROMPT_CONTEXT_KEY, prompts[0]) # .to_messages() or not .to_messages() ... that is the question
         return super().generate_prompt(prompts, stop=stop)
         
     

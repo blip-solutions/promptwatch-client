@@ -26,7 +26,7 @@ class ContextTrackerSingleton(ABCMeta,type):
     _thread_local = threading.local()
     _cross_thread_storage = {}
 
-    def __call__(cls, *args, **kwargs):
+    def __call__(cls, *args, **kwargs)->PromptWatch:
         """Call method for the singleton metaclass."""
         if not hasattr(ContextTrackerSingleton._thread_local, "_instance"):
             prompt_watch_context = super(ContextTrackerSingleton, cls).__call__(*args, **kwargs)
@@ -37,7 +37,7 @@ class ContextTrackerSingleton(ABCMeta,type):
        
         return ContextTrackerSingleton._thread_local._instance 
         
-    def get_current(session_id:str=None):
+    def get_current(session_id:str=None)->PromptWatch:
         """ return the current instance
         for sync context session_id is not required
         for async context session_id is required, otherwise it the instance wont be found

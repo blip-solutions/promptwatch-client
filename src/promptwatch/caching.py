@@ -18,12 +18,14 @@ if TYPE_CHECKING:
 DEFAULT_CACHE_KEY="default"
 
 class CacheResult:
-    def __init__(self, cache_namespace_key, prompt, embedding, result:str=None, metadata:Dict[str,Union[str,int]]=None):
+    def __init__(self, cache_namespace_key, prompt, embedding, result:str=None, metadata:Dict[str,Union[str,int]]=None, prompt_template_identity=None, prompt_input_values=None):
         self.prompt = prompt
         self.embedding = embedding
         self.cache_namespace_key = cache_namespace_key
         self.result = result
         self.metadata=metadata
+        self.prompt_template_identity=prompt_template_identity
+        self.prompt_input_values=prompt_input_values
         
     
     def __bool__(self):
@@ -143,7 +145,7 @@ class PromptWatchCache:
                 if result:
                     metadata["similarity"]=similarity
                 
-                return CacheResult(cache_namespace_key=self.cache_namespace_key, prompt=prompt, embedding=prompt_embedding, result=result, metadata=(metadata if result else None))
+                return CacheResult(cache_namespace_key=self.cache_namespace_key, prompt=prompt, embedding=prompt_embedding, result=result, metadata=(metadata if result else None), prompt_template_identity=prompt_template_identity, prompt_input_values=prompt_input_values)
             
            
         except Exception as e:
@@ -157,11 +159,12 @@ class PromptWatchCache:
                 if not_found_handle.cache_namespace_key != self.cache_namespace_key:
                     raise ValueError("PromptWatchCache.add called with a not_found_handle that does not belong to this cache")
                 prompt_hash = uuid5(NAMESPACE_DNS, not_found_handle.prompt)
-                self.implementation.add(prompt_hash, not_found_handle.embedding, result)
+                self.implementation.add(prompt_hash=prompt_hash, prompt_embedding=not_found_handle.embedding, result=result, prompt_template_identity=not_found_handle.prompt_template_identity, prompt_input_values=not_found_handle.prompt_input_values)
             except Exception as e:
                 self.logger.warn(f"Failed storing prompt into cache {e}")
         
-    
+
+
 
     def clear(self):
         self.implementation.clear()
@@ -270,7 +273,7 @@ class CacheImplBase(ABC):
         pass
     
     @abstractmethod
-    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str, prompt_template_identity:str=None, input_parameters:Dict[str,str]=None)->None:
+    def add(self, prompt_hash:UUID, prompt_embedding:List[float],result:str, prompt_template_identity:str=None, prompt_input_values:Dict[str,str]=None)->None:
         pass
 
     @abstractmethod
