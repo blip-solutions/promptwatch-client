@@ -38,3 +38,11 @@
 
 ## Version 0.1.1 (2023-05-19)
 - add some sanity checks for common mistakes
+
+## Version 0.1.2-3 (2023-05-23)
+- fixed registering templates for LLMChain subclasses [GH Issue #7](https://github.com/blip-solutions/promptwatch-client/issues/7)
+
+## Version 0.2.0 (2023-05-31)
+- much better semantic caching for registered templates... now viable option for Agents and many other scenarios !
+- adding option to recursively register all templates automatically using `find_templates_recursive` or `find_and_register_templates_recursive` 
+- added possibility of using API_KEY parameter in UnitTests [GH feature request #9](https://github.com/blip-solutions/promptwatch-client/issues/9)
