@@ -55,6 +55,34 @@ class PromptWatchCache:
         else:
             return False
         
+    def embed(self, text:Union[List[str],str])->Union[List[float],List[List[float]]]:
+        token_usage=0
+        is_list=False
+        res_embeddings =[]
+        if isinstance(text, str):
+            to_embed = [text]
+            is_list=False
+        else:
+            to_embed = text
+            is_list=True
+        for t in to_embed:
+            if not self.test_token_limit(t):
+                self.logger.info(f"Prompt is too long to be cached. Skipping")
+                return None,{}
+
+        if isinstance(self.embed_func, EmbeddingProviderBase) and self.embed_func.should_include_token_usage:
+            for t in to_embed:
+                _prompt_embedding, _token_usage = self.embed_func(t, True)
+                res_embeddings.append(_prompt_embedding)
+                token_usage+=_token_usage
+        else:
+            for t in to_embed:
+                res_embeddings.append(self.embed_func(text))
+
+        metadata={"token_usage":token_usage} if token_usage else None
+        if not is_list:
+            res_embeddings=res_embeddings[0]
+        return res_embeddings, metadata
     
     def get(self, prompt:str, prompt_template:Union[ "BasePromptTemplate","NamedPromptTemplateDescription"]=None, prompt_input_values:Dict[str,str]=None, prompt_template_name:str=None, prompt_template_version:str=None)->Union[CacheResult,None]:
         """ returns cached str if found, NotFoundHandle if not found, None if prompt is too long to be cached
@@ -96,20 +124,14 @@ class PromptWatchCache:
             print("\033[38;5;208mWarning: Using cache without registered template. This will very likely lead to poor cache precision!\033[0m")
             print("\033[38;5;208mSee: https://docs.promptwatch.io/docs/caching\033[0m")
         try:
-            if prompt_input_values:
-                prompt = "; ".join((f"{k}:{v}" for k,v in prompt_input_values.items()))
-            else:
-                prompt = prompt
-                
-            if self.test_token_limit(prompt):
-                if isinstance(self.embed_func, EmbeddingProviderBase) and self.embed_func.should_include_token_usage:
-                    prompt_embedding, token_usage = self.embed_func(prompt, True)
-                    metadata={
-                        "token_usage":token_usage
-                    }
+                if prompt_input_values:
+                    prompt_embedding, metadata = self.embed([f"{key}: {param}" for key,param in sorted(prompt_input_values.items())])
                 else:
-                    prompt_embedding = self.embed_func(prompt)
-                    metadata={}
+                    prompt_embedding, metadata = self.embed(prompt)
+                
+                if not prompt_embedding:
+                    # prompt is too long to be cached
+                    return None
                 
 
                 result, similarity = self.implementation.get(
@@ -121,11 +143,9 @@ class PromptWatchCache:
                 if result:
                     metadata["similarity"]=similarity
                 
-                return CacheResult(self.cache_namespace_key, prompt, prompt_embedding, result=result, metadata=(metadata if result else None))
-                
-            else:
-                self.logger.warning(f"Prompt {prompt} is too long to be cached. It will be ignored")
-                return None
+                return CacheResult(cache_namespace_key=self.cache_namespace_key, prompt=prompt, embedding=prompt_embedding, result=result, metadata=(metadata if result else None))
+            
+           
         except Exception as e:
             self.logger.warn(f"Skipping cache due to Error: {e}")
     

@@ -3,6 +3,7 @@ from __future__ import annotations
 from ast import Tuple
 import re
 from abc import ABC
+import types
 from typing import Any, Dict, Optional, Union
 import datetime
 from langchain.prompts.base import BasePromptTemplate
@@ -489,10 +490,20 @@ def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name
     Yields:
         Tuple(): _description_
     """
+
+    is_tool=isinstance(root_chain,BaseTool) 
     for field_key, field_value in root_chain.__dict__.items():
         if field_value is None or field_value in _ignore_chains:
             continue
-        if isinstance(field_value,Chain):
+        if is_tool and isinstance(field_value, types.MethodType):
+            # tools have a "func" field that is bound to the tool it self
+            if field_value.__self__ in _ignore_chains:
+                continue
+
+            _ignore_chains.append(field_value.__self__)
+            for res_pair in find_templates_recursive(field_value.__self__, f"{template_name_prefix}.{field_key}"):
+                yield res_pair
+        elif isinstance(field_value,Chain):
               _ignore_chains.append(field_value)
               for res_pair in find_templates_recursive(field_value, f"{template_name_prefix}.{field_key}"):
                     yield res_pair
@@ -501,14 +512,16 @@ def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name
             for res_pair in find_templates_recursive(field_value, f"{template_name_prefix}.{field_key}"):
                 yield res_pair
         elif isinstance(field_value, list):
-            for item in field_value:
-                if isinstance(item, Chain):
+            for i,item in enumerate(field_value):
+                
+                if hasattr(item,"name"):
+                    index_key = f"{field_key}.[{item.name}]"
+                else:
+                    index_key = f"{field_key}[{i}]"
+
+                if isinstance(item, BaseTool) or  isinstance(item, Chain):
                     _ignore_chains.append(item)
-                    for res_pair in find_templates_recursive(item, f"{template_name_prefix}.{field_key}"):
-                        yield res_pair
-                if isinstance(item, BaseTool):
-                    _ignore_chains.append(item)
-                    for res_pair in find_templates_recursive(item, f"{template_name_prefix}.{field_key}"):
+                    for res_pair in find_templates_recursive(item, f"{template_name_prefix}.{index_key}"):
                         yield res_pair
         elif isinstance(field_value, BasePromptTemplate):
             if field_value.__dict__.get("__template_name__") :
@@ -517,6 +530,8 @@ def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name
             if print_code:
                 print(f"register_prompt_template({template_name_prefix}.{field_key}, '{template_name_prefix}.{field_key}'")
             yield f"{template_name_prefix}.{field_key}", field_value
+        
+            
 
 def find_and_register_templates_recursive(root_chain: Chain, template_name_prefix:str, ignore_subpaths=[]):
     paths = []
@@ -525,6 +540,8 @@ def find_and_register_templates_recursive(root_chain: Chain, template_name_prefi
         for subpath in ignore_subpaths:
             if subpath in path:
                 ignore=True
+        if ignore:
+            continue
         register_prompt_template(template_name=path, prompt_template=template)
         paths.append(path)
     print(f"Registered {len(paths)} templates: ")
