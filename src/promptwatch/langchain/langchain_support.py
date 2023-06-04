@@ -493,7 +493,7 @@ def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name
 
     is_tool=isinstance(root_chain,BaseTool) 
     for field_key, field_value in root_chain.__dict__.items():
-        if field_value is None or field_value in _ignore_chains:
+        if field_value is None or any(field_value is value for value in _ignore_chains):
             continue
         if is_tool and isinstance(field_value, types.MethodType):
             # tools have a "func" field that is bound to the tool it self

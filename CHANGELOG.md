@@ -46,3 +46,6 @@
 - much better semantic caching for registered templates... now viable option for Agents and many other scenarios !
 - adding option to recursively register all templates automatically using `find_templates_recursive` or `find_and_register_templates_recursive` 
 - added possibility of using API_KEY parameter in UnitTests [GH feature request #9](https://github.com/blip-solutions/promptwatch-client/issues/9)
+
+## Version 0.2.1 (2023-06-04)
+ - change implementation of comparing instances in find_templates_recursive, since there is a weird implementation in langchain that causes error even for testing instances
