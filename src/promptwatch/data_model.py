@@ -143,11 +143,7 @@ class ParallelPrompt(ActivityBase):
     activity_type:Literal['parallel-prompt'] = 'parallel-prompt'
     prompts:List[LlmPrompt]
 
-    def __init__(self, thoughts:List[LlmPrompt]):
-        super().__init__(self)
-        for thought in thoughts:
-            thought.parent_activity_id = self.id
-        return self
+    
     
     def __str__(self) -> str:
         thoughts_strings = '\n\t'.join(t.generated  for t in self.prompts)

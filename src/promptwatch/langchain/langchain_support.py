@@ -226,7 +226,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                         prompt_input_values[k] = convert_chat_messages(v)
                         
         else:
-            info_message="Could not retrieve all the additional information needed to for reproducible prompt execution. Consider registering the prompt template."
+            info_message="Could not retrieve all the additional information needed to for reproducible prompt execution. Make sure to run LLM inside LLMChain. Consider registering the prompt template."
 
         if len(prompts)==1:
             
@@ -244,12 +244,13 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                             prompt_template=prompt_template,
                             prompt_input_values=prompt_input_values,
                             info_message=info_message,
+                            order=0,
+                            metadata={}
                         ))
             self.prompt_watch._open_activity(ParallelPrompt(
-                    prompts=prompts,
+                    prompts=_prompts,
                     metadata={**serialized,**kwargs} if serialized and kwargs else (serialized or kwargs),
                     order=self.prompt_watch.current_session.steps_count+1, 
-                    session_id=self.prompt_watch.current_session.id,
                     info_message=info_message,
                 )
             )
@@ -265,7 +266,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
         """Run when LLM ends running."""
         if len(response.generations)>1:
-            prompts =  self.prompt_watch.current_activity.thoughts
+            prompts =  self.prompt_watch.current_activity.prompts
         else:
             prompts=[self.prompt_watch.current_activity]
         
@@ -273,9 +274,9 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         if not self.prompt_watch.current_activity.metadata:
             self.prompt_watch.current_activity.metadata={}
 
-        for thought, generated_responses in zip(prompts, response.generations):
-            thought.generated = "\n---\n".join([resp.text for resp in generated_responses])
-            thought.metadata["generation_info"] = [resp.generation_info for resp in generated_responses] if len(generated_responses)>1 else generated_responses[0].generation_info
+        for prompt, generated_responses in zip(prompts, response.generations):
+            prompt.generated = "\n---\n".join([resp.text for resp in generated_responses])
+            prompt.metadata["generation_info"] = [resp.generation_info for resp in generated_responses] if len(generated_responses)>1 else generated_responses[0].generation_info
 
         if response.llm_output is not None:
             self.prompt_watch.current_activity.metadata["llm_output"]=response.llm_output
