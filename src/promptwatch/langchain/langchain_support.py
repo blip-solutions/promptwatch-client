@@ -12,7 +12,8 @@ from langchain.llms.base import LLM
 from langchain.chat_models.base import BaseChatModel
 from langchain.chains import LLMChain
 from langchain.embeddings.base import Embeddings
-from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage
+from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage 
+from langchain.prompts import ChatMessagePromptTemplate as LangChainChatMessagePromptTemplate
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.agents import initialize_agent, Tool, Agent, BaseSingleActionAgent
 from langchain.tools.base import BaseTool
@@ -141,11 +142,21 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             #TODO: .. we should restore the state of the things as were before...
             pass
             
-
+        
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
+        *,
+        run_id,
+        parent_run_id = None,
+        **kwargs: Any,
+    ) -> Any:
+        self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
     
 
     def on_llm_start(
-        self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any
+        self, serialized: Dict[str, Any], prompts: List[str, List[BaseMessage]], **kwargs: Any
     ) -> Any:
         """Run when LLM starts running."""
 
@@ -154,6 +165,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         llm_info=None
         info_message=None
         formatted_prompt=None
+
+        
 
         current_llm_chain:LLMChain= self.prompt_watch.get_context(LLM_CHAIN_CONTEXT_KEY)
 
@@ -179,13 +192,20 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             prompt_input_values = self.prompt_watch.current_activity.inputs
 
             formatted_prompt = self.prompt_watch.get_context(FORMATTED_PROMPT_CONTEXT_KEY)
-            if isinstance(current_llm_chain.prompt,ChatPromptTemplate):
+
+            
+            if prompts and prompts[0] and isinstance(prompts[0][0],LangChainChatMessage):
+                
+                prompts=[convert_chat_messages(prompts_set) for prompts_set in prompts]
+            # this is probably unnecessary now, but keeping it for now
+            elif isinstance(current_llm_chain.prompt,ChatPromptTemplate):
                 if not formatted_prompt:
                     # we need to reformat the prompt so we can get the original values, not the strings
                     formatted_prompt = current_llm_chain.prep_prompts([prompt_input_values])[0][0]
                 if formatted_prompt:
                     #throwing away the original prompt from langchain tracing and replacing it with the original formatted messages
                     prompts = [convert_chat_messages(formatted_prompt.messages)]
+            
             
             
             
@@ -205,7 +225,6 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                     if v and isinstance(v,list) and isinstance(v[0],BaseMessage):
                         prompt_input_values[k] = convert_chat_messages(v)
                         
-
         else:
             info_message="Could not retrieve all the additional information needed to for reproducible prompt execution. Consider registering the prompt template."
 
@@ -218,16 +237,16 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                 metadata={"llm":llm_info,**(serialized or {}),**(kwargs or {})} 
                 ))
         elif len(prompts)>1:
-            thoughts = []
+            _prompts = []
             for prompt in prompts:
-                thoughts.append( LlmPrompt(
+                _prompts.append( LlmPrompt(
                             prompt=prompt, #why we have here more than one prompt?
                             prompt_template=prompt_template,
                             prompt_input_values=prompt_input_values,
                             info_message=info_message,
                         ))
             self.prompt_watch._open_activity(ParallelPrompt(
-                    thoughts=thoughts,
+                    prompts=prompts,
                     metadata={**serialized,**kwargs} if serialized and kwargs else (serialized or kwargs),
                     order=self.prompt_watch.current_session.steps_count+1, 
                     session_id=self.prompt_watch.current_session.id,
@@ -240,20 +259,21 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
+        pass
 
     
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
         """Run when LLM ends running."""
         if len(response.generations)>1:
-            thoughts =  self.prompt_watch.current_activity.thoughts
+            prompts =  self.prompt_watch.current_activity.thoughts
         else:
-            thoughts=[self.prompt_watch.current_activity]
+            prompts=[self.prompt_watch.current_activity]
         
         
         if not self.prompt_watch.current_activity.metadata:
             self.prompt_watch.current_activity.metadata={}
 
-        for thought, generated_responses in zip(thoughts, response.generations):
+        for thought, generated_responses in zip(prompts, response.generations):
             thought.generated = "\n---\n".join([resp.text for resp in generated_responses])
             thought.metadata["generation_info"] = [resp.generation_info for resp in generated_responses] if len(generated_responses)>1 else generated_responses[0].generation_info
 
@@ -636,6 +656,8 @@ def create_prompt_template_description( langchain_prompt_template:BasePromptTemp
                     role="assistant"
                 elif isinstance(msg,SystemMessagePromptTemplate):
                     role="system"
+                elif isinstance(msg,LangChainChatMessagePromptTemplate):
+                    role=msg.role
                 if hasattr(msg,"prompt"):
                     if hasattr(msg.prompt,"template"):
                         prompt_template = msg.prompt.template
