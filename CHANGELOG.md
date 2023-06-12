@@ -52,3 +52,6 @@
 
 ## Version 0.2.2 (2023-06-12)
 - better chat messages tracking
+
+## Version 0.2.3 (2023-06-12)
+- fix for parallel prompts [GH Issue #13](https://github.com/blip-solutions/promptwatch-client/issues/13)
