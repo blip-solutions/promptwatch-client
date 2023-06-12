@@ -49,3 +49,6 @@
 
 ## Version 0.2.1 (2023-06-04)
  - change implementation of comparing instances in find_templates_recursive, since there is a weird implementation in langchain that causes error even for testing instances
+
+## Version 0.2.2 (2023-06-12)
+- better chat messages tracking
