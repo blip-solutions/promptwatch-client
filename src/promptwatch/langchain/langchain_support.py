@@ -303,7 +303,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     ) -> Any:
         """Run when chain starts running."""
         
-        if "LLM" in serialized.get("name") :
+        if "LLM" in serialized.get("name","") :
             current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
             self.prompt_watch.add_context(LLM_CHAIN_CONTEXT_KEY,current_llm_chain)
 
