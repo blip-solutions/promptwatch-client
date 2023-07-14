@@ -15,14 +15,14 @@ from langchain.embeddings.base import Embeddings
 from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage 
 from langchain.prompts import ChatMessagePromptTemplate as LangChainChatMessagePromptTemplate
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.agents import initialize_agent, Tool, Agent, BaseSingleActionAgent
+from langchain.agents import Tool, Agent, BaseSingleActionAgent
 from langchain.tools.base import BaseTool
 from langchain.chains.base import Chain
 
 from langchain.schema import AgentAction, AgentFinish, LLMResult,  Document
 from ..client import Client
 from ..data_model import NamedPromptTemplateDescription,PromptTemplateDescription, LlmPrompt, ParallelPrompt, ChainSequence, ChatMessage, Answer, Action, Question, RetrievedDocuments, DocumentSnippet, ChatMessagePromptTemplate
-from ..utils import find_the_caller_in_the_stack, is_primitive_type, wrap_a_method
+from ..utils import find_the_caller_in_the_stack, wrap_a_method, copy_dict_serializable_values
 from .caching import CachedLLM, CachedChatLLM
 from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY
 
@@ -143,7 +143,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             pass
             
         
-    def on_chat_model_start(
+    async def on_chat_model_start(
         self,
         serialized: Dict[str, Any],
         messages: List[List[BaseMessage]],
@@ -152,10 +152,10 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         parent_run_id = None,
         **kwargs: Any,
     ) -> Any:
-        self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
+        await self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
     
 
-    def on_llm_start(
+    async  def on_llm_start(
         self, serialized: Dict[str, Any], prompts: List[str, List[BaseMessage]], **kwargs: Any
     ) -> Any:
         """Run when LLM starts running."""
@@ -166,7 +166,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         info_message=None
         formatted_prompt=None
 
-        
+        if prompts and prompts[0] and isinstance(prompts[0][0],BaseMessage):
+            prompts=[convert_chat_messages(prompts_set) for prompts_set in prompts]
 
         current_llm_chain:LLMChain= self.prompt_watch.get_context(LLM_CHAIN_CONTEXT_KEY)
 
@@ -175,12 +176,13 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             prompt_template = PromptWatch.prompt_template_register_cache.get(template_name)
             
         # this should ensure that all the additional data is available in the context
+        llm_info = kwargs.get("invocation_params")  
         if current_llm_chain:
             if current_llm_chain.llm and current_llm_chain.llm.dict:
                 llm = current_llm_chain.llm
                 if hasattr(current_llm_chain.llm,"inner_llm"): # cachedLLM
                     llm = llm.inner_llm
-                llm_info = {k:v for k,v in llm.dict().items() if is_primitive_type(v)}
+                llm_info = copy_dict_serializable_values(llm.dict())
                 llm_info["stop"] = self.prompt_watch.current_activity.inputs.get("stop")
             # lets try to retrieve registered named template first... it's faster
             
@@ -194,7 +196,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             formatted_prompt = self.prompt_watch.get_context(FORMATTED_PROMPT_CONTEXT_KEY)
 
             
-            if prompts and prompts[0] and isinstance(prompts[0][0],LangChainChatMessage):
+            if prompts and prompts[0] and isinstance(prompts[0][0],BaseMessage):
                 
                 prompts=[convert_chat_messages(prompts_set) for prompts_set in prompts]
             # this is probably unnecessary now, but keeping it for now
@@ -258,12 +260,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
     
-    def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
+    async  def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
         pass
 
     
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
+    async def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
         """Run when LLM ends running."""
         if len(response.generations)>1:
             prompts =  self.prompt_watch.current_activity.prompts
@@ -277,6 +279,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         for prompt, generated_responses in zip(prompts, response.generations):
             prompt.generated = "\n---\n".join([resp.text for resp in generated_responses])
             prompt.metadata["generation_info"] = [resp.generation_info for resp in generated_responses] if len(generated_responses)>1 else generated_responses[0].generation_info
+            
+            if generated_responses and getattr(generated_responses[0],"message",None):
+                function_calls= [resp.message.additional_kwargs.get("function_call") for resp in generated_responses] 
+
+                prompt.metadata["function_call"] = function_calls if len(function_calls)>1 else function_calls[0]
+            
 
         if response.llm_output is not None:
             self.prompt_watch.current_activity.metadata["llm_output"]=response.llm_output
@@ -291,19 +299,19 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
 
     
-    def on_llm_error(
+    async def on_llm_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when LLM errors."""
         self.prompt_watch._on_error(error, kwargs)
 
     
-    def on_chain_start(
+    async def on_chain_start(
         self, serialized: Dict[str, Any], inputs: Dict[str, Any], **kwargs: Any
     ) -> Any:
         """Run when chain starts running."""
         
-        if "LLM" in serialized.get("name","") :
+        if "LLM" in serialized.get("name","") or "LLM" in ".".join(serialized.get("id",[])) :
             current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
             self.prompt_watch.add_context(LLM_CHAIN_CONTEXT_KEY,current_llm_chain)
 
@@ -353,12 +361,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                     ))
             self.prompt_watch._add_activity(RetrievedDocuments(documents=docs))
     
-    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
+    async  def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
         """Run when chain ends running."""
         
         
         self.prompt_watch._remove_context(LLM_CHAIN_CONTEXT_KEY)
-            
+        outputs = copy_dict_serializable_values(outputs)
         self.prompt_watch.current_activity.outputs=outputs
         if outputs.get("answer"):
             self.prompt_watch._add_activity(Answer(text=outputs["answer"]),as_root=True)
@@ -375,14 +383,14 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.prompt_watch._close_current_activity()
 
     
-    def on_chain_error(
+    async  def on_chain_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when chain errors."""
         self.prompt_watch._on_error(error, kwargs)
 
     
-    def on_tool_start(
+    async def on_tool_start(
         self, serialized: Dict[str, Any], input_str: str, **kwargs: Any
     ) -> Any:
         """Run when tool starts running."""
@@ -391,7 +399,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             )
 
     
-    def on_tool_end(self, output: str, **kwargs: Any) -> Any:
+    async  def on_tool_end(self, output: str, **kwargs: Any) -> Any:
         """Run when tool ends running."""
         self.prompt_watch.current_activity.output=output
         self.prompt_watch.current_activity.output_data=kwargs
@@ -402,18 +410,18 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
 
     
-    def on_tool_error(
+    async  def on_tool_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when tool errors."""
         self.prompt_watch._on_error(error, kwargs)
 
     
-    def on_text(self, text: str, **kwargs: Any) -> Any:
+    async def on_text(self, text: str, **kwargs: Any) -> Any:
         """Run on arbitrary text."""
 
     
-    def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
+    async def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
         """Run on agent action."""
         
         
@@ -421,7 +429,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
     
-    def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> Any:
+    async def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> Any:
         """Run on agent end."""
         answer_text = finish[0].get("output")
         answer_activity = Answer(text=answer_text)
@@ -589,7 +597,8 @@ def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
                     role="assistant"
                 elif isinstance(msg,SystemMessage):
                     role="system"
-                    
+                elif msg.type=="function":
+                    role="function"
                 return (ChatMessage(role=role,text=msg.content))
         elif isinstance(msg, list):
             return [convert_chat_messages(msg) for msg in msg]
