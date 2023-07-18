@@ -24,8 +24,8 @@ class ContextTrackerSingleton(ABCMeta,type):
     Singleton metaclass for ensuring only one instance of a class per thread
     """
 
-    #_thread_local = threading.local()
-    #_cross_thread_storage = {}
+    
+    _cross_thread_storage = {}
 
     def __call__(cls, *args, **kwargs)->PromptWatch:
         """Call method for the singleton metaclass."""
@@ -36,8 +36,8 @@ class ContextTrackerSingleton(ABCMeta,type):
                 raise Exception("PromptWatch: Session ID was not initialized. Please report this as a bug.")
             session_context.set(prompt_watch_context)
             
-            # ContextTrackerSingleton._cross_thread_storage[prompt_watch_context.session_id] = prompt_watch_context
-            # ContextTrackerSingleton._thread_local._instance = prompt_watch_context
+            ContextTrackerSingleton._cross_thread_storage[prompt_watch_context.session_id] = prompt_watch_context
+            
        
         return prompt_watch_context
         
@@ -48,7 +48,7 @@ class ContextTrackerSingleton(ABCMeta,type):
         """
         prompt_watch_context =  session_context.get(None)
         if not prompt_watch_context:
-            return None
+            return ContextTrackerSingleton._cross_thread_storage.get(session_id)
         elif session_id and prompt_watch_context.session_id != session_id:
             raise Exception("PromptWatch: Session ID mismatch. Please report this as a bug.")
         else:
@@ -436,8 +436,9 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.current_session=None
 
     def _on_error(self, error, kwargs):
-        self.current_activity.error=str(error)
-        if kwargs:
+        if self.current_activity:
+            self.current_activity.error=str(error)
+        if self.current_activity and kwargs:
             if not self.current_activity.metadata:
                 self.current_activity.metadata={}
             self.current_activity.metadata["error_kwargs"]=kwargs

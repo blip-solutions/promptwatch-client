@@ -306,13 +306,14 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.prompt_watch._on_error(error, kwargs)
 
     
-    async def on_chain_start(
+    def on_chain_start(
         self, serialized: Dict[str, Any], inputs: Dict[str, Any], **kwargs: Any
     ) -> Any:
         """Run when chain starts running."""
         
-        if "LLM" in serialized.get("name","") or "LLM" in ".".join(serialized.get("id",[])) :
-            current_llm_chain = find_the_caller_in_the_stack(serialized["name"])
+        chain_name = serialized.get("name") or  serialized.get("id",[None])[-1]
+        if "LLM" in chain_name :
+            current_llm_chain = find_the_caller_in_the_stack(chain_name)
             self.prompt_watch.add_context(LLM_CHAIN_CONTEXT_KEY,current_llm_chain)
 
         self.try_get_retrieved_documents(inputs)
