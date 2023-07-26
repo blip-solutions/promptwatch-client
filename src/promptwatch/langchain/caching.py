@@ -1,7 +1,5 @@
-
-
-
 from __future__ import annotations
+import json
 from typing import Any, Optional, Union
 from langchain.prompts.chat import ChatPromptValue
 from langchain.llms.base import LLM, BaseLLM
@@ -10,7 +8,6 @@ from langchain.embeddings.base import Embeddings
 from langchain.schema import AIMessage, BaseMessage, ChatGeneration, ChatResult
 from langchain.schema import PromptValue
 from langchain.schema import LLMResult
-
 from ..data_model import LlmPrompt, NamedPromptTemplateDescription
 from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY
 from typing import List
@@ -191,10 +188,22 @@ class CachedChatLLM(BaseChatModel):
 
             chat_result:ChatResult = await self.inner_llm._agenerate(messages, stop, **kwargs) 
             if callback:
-                callback(cached_res, chat_result.generations[0].text)
+                function_call = chat_result.generations[0].message and chat_result.generations[0].message.additional_kwargs and chat_result.generations[0].message.additional_kwargs.get("function_call")
+                if function_call:
+                    additional_data={"function_call":function_call}
+                    result =  chat_result.generations[0].message.content + '\x03'+ json.dumps(additional_data)
+                else:
+                    result = chat_result.generations[0].message.content
+
+                callback(cached_res, result)
             return chat_result
         else:
-            generated_msg = AIMessage(content=cached_res.result)
+            if '\x03' in cached_res.result:
+                result, additional_data = cached_res.result.split('\x03')
+                additional_data = json.loads(additional_data)
+                generated_msg = AIMessage(content=result, additional_kwargs=additional_data)
+            else:
+                generated_msg = AIMessage(content=cached_res.result)
             generation = ChatGeneration(message=generated_msg, generation_info={"cached":True, **cached_res.metadata, "cache_namespace_key":cached_res.cache_namespace_key})
             return ChatResult(generations=[generation],llm_output={"cached":True})
 
