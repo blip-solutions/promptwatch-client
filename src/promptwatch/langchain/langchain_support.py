@@ -143,7 +143,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             pass
             
         
-    async def on_chat_model_start(
+    def on_chat_model_start(
         self,
         serialized: Dict[str, Any],
         messages: List[List[BaseMessage]],
@@ -152,10 +152,10 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         parent_run_id = None,
         **kwargs: Any,
     ) -> Any:
-        await self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
+        self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
     
 
-    async  def on_llm_start(
+    def on_llm_start(
         self, serialized: Dict[str, Any], prompts: List[str, List[BaseMessage]], **kwargs: Any
     ) -> Any:
         """Run when LLM starts running."""
@@ -260,12 +260,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
     
-    async  def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
+    def on_llm_new_token(self, token: str, **kwargs: Any) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
         pass
 
     
-    async def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
         """Run when LLM ends running."""
         if len(response.generations)>1:
             prompts =  self.prompt_watch.current_activity.prompts
@@ -299,7 +299,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
 
     
-    async def on_llm_error(
+    def on_llm_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when LLM errors."""
@@ -362,7 +362,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                     ))
             self.prompt_watch._add_activity(RetrievedDocuments(documents=docs))
     
-    async  def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
+    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
         """Run when chain ends running."""
         
         
@@ -384,14 +384,14 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.prompt_watch._close_current_activity()
 
     
-    async  def on_chain_error(
+    def on_chain_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when chain errors."""
         self.prompt_watch._on_error(error, kwargs)
 
     
-    async def on_tool_start(
+    def on_tool_start(
         self, serialized: Dict[str, Any], input_str: str, **kwargs: Any
     ) -> Any:
         """Run when tool starts running."""
@@ -400,7 +400,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
             )
 
     
-    async  def on_tool_end(self, output: str, **kwargs: Any) -> Any:
+    def on_tool_end(self, output: str, **kwargs: Any) -> Any:
         """Run when tool ends running."""
         self.prompt_watch.current_activity.output=output
         self.prompt_watch.current_activity.output_data=kwargs
@@ -411,18 +411,18 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
 
     
-    async  def on_tool_error(
+    def on_tool_error(
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when tool errors."""
         self.prompt_watch._on_error(error, kwargs)
 
     
-    async def on_text(self, text: str, **kwargs: Any) -> Any:
+    def on_text(self, text: str, **kwargs: Any) -> Any:
         """Run on arbitrary text."""
 
     
-    async def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
+    def on_agent_action(self, action: AgentAction, **kwargs: Any) -> Any:
         """Run on agent action."""
         
         
@@ -430,7 +430,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
     
-    async def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> Any:
+    def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> Any:
         """Run on agent end."""
         answer_text = finish[0].get("output")
         answer_activity = Answer(text=answer_text)
