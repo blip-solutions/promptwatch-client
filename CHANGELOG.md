@@ -59,7 +59,11 @@
 ## Version 0.2.4 (2023-06-13)
 - fix if "name" is not a field present on the chain [GH Issue #13](https://github.com/blip-solutions/promptwatch-client/issues/13)
 
-## Version 0.2.4 (2023-07-14)
+## Version 0.2.5 (2023-07-14)
 - fix for latest versions of langchain
 - different context implementation
 - async handlers
+
+## Version 0.2.7 (2023-07-14)
+- return back to sync handler as it was causing problems with latest langchain
+- support for caching responses with function calls
