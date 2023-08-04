@@ -49,7 +49,7 @@ class UnitTest:
                     except Exception as e:
                         raise Exception(f"Failed to parse line {line} in file {file_path}. Data are expected to be in json line format.\nError: {e}") 
                     
-                    test_case = TestCase(data)
+                    test_case = TestCase(**data)
                         
                     yield test_case
 
