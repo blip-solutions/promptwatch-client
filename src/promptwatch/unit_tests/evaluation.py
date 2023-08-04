@@ -259,7 +259,7 @@ class TestCaseEvaluationWrapper:
             self.mark_as_failed(str(e))
             if "Missing some input keys:" in str(e):
                 # this is likely due to missing test memory...
-                raise Exception(f"Got exception {str(e)}. \nThis is likely due to missing test memory. Please see: docs.promptwatch.com/docs/unit_testing/unit_tests_reference_guide#langchain-test-memory")
+                raise Exception(f"Got exception {str(e)}. \nThis is likely due to missing test memory. Please see: docs.promptwatch.io/docs/unit_testing/unit_tests_reference_guide#langchain-test-memory")
             
             if not continue_on_error:
                 raise e
