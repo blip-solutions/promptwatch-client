@@ -67,3 +67,6 @@
 ## Version 0.2.7 (2023-07-14)
 - return back to sync handler as it was causing problems with latest langchain
 - support for caching responses with function calls
+
+## Version 0.2.8 (2023-08-04)
+- fix loading UnitTests from file
