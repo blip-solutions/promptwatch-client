@@ -178,7 +178,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         # this should ensure that all the additional data is available in the context
         llm_info = kwargs.get("invocation_params")  
         if current_llm_chain:
-            if current_llm_chain.llm and current_llm_chain.llm.dict:
+            if not llm_info and current_llm_chain.llm and current_llm_chain.llm.dict:
                 llm = current_llm_chain.llm
                 if hasattr(current_llm_chain.llm,"inner_llm"): # cachedLLM
                     llm = llm.inner_llm
@@ -319,7 +319,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.try_get_retrieved_documents(inputs)
                   
 
-
+        
         question = inputs.get("question") 
         if not question and "chat_history" in inputs:
             #try to get question from inputs
@@ -639,8 +639,10 @@ def serialize_chain_inputs(inputs:dict):
                     res[k]=[serialize_chain_inputs(item) for item in v]
                 else:
                     res[k]=v
-        else:
+        elif v and type(v) in [str, int, float, bool]:
             res[k]=v
+        else:
+            res[k]=str(v) if v is not None else None
     return res
 
 def create_prompt_template_description( langchain_prompt_template:BasePromptTemplate, template_name:str = None, template_version:str=None)->Union[PromptTemplateDescription,NamedPromptTemplateDescription, None ]:

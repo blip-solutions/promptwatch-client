@@ -70,3 +70,6 @@
 
 ## Version 0.2.8 (2023-08-04)
 - fix loading UnitTests from file
+
+## Version 0.2.9 (2023-08-14)
+- fix logging functions
