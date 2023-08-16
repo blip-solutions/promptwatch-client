@@ -88,8 +88,8 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         """
         self.logger = logging.getLogger("PromptWatch")
         self.session_id = session_id
-        self.tracking_project=tracking_project
-        self.tracking_tenant=tracking_tenant or os.environ.get(EnvVariables.PROMPTWATCH_TRACKING_PROJECT)
+        self.tracking_project=tracking_project or os.environ.get(EnvVariables.PROMPTWATCH_TRACKING_PROJECT)
+        self.tracking_tenant=tracking_tenant 
 
         if not api_key:
             api_key=os.environ.get(EnvVariables.PROMPTWATCH_API_KEY)
@@ -223,7 +223,27 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         """
         return ContextTrackerSingleton.get_current()
     
+    @classmethod
+    def log_user_question(cls, question_text:str, metadata:dict=None):
+        """_summary_
 
+        Log user request message
+
+        Args:
+            question_text (str): _description_
+        """
+        cls.log_activity(Question(text=question_text, metadata=metadata))
+
+    @classmethod
+    def log_assistant_answer(cls, answer_text:str, metadata:dict=None):
+        """_summary_
+
+        Log assistant response
+
+        Args:
+            answer_text (str): _description_
+        """
+        cls.log_activity(Answer(text=answer_text, metadata=metadata))
 
     @classmethod
     def log(cls, text: str, error_msg:Optional[str]=None, metadata: Optional[Dict[str, Any]] = None):
