@@ -5,7 +5,6 @@ import os
 import logging
 from datetime import datetime
 from .unit_tests.schema import TestCase,  PromptUnitTestRun, TestCaseResult, TestCaseResultsList
-from pydantic.json import pydantic_encoder
 
 
 class Client:

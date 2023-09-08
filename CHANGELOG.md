@@ -73,3 +73,8 @@
 
 ## Version 0.2.9 (2023-08-14)
 - fix logging functions
+
+## Version 0.3.0 (2023-09-08)
+- hotfix for breaking changes in pydantic v2+
+- changed context tracking
+- multiple fixes on collecting data from chat models

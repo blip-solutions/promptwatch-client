@@ -1,10 +1,17 @@
+from abc import ABC, abstractmethod
 from typing import *
 from promptwatch.data_model import NamedPromptTemplateDescription,ActivityBase, LlmPrompt
 
-from pydantic import BaseModel, validator, Field
 from uuid import uuid4
 
 from datetime import datetime,timedelta
+
+import pydantic
+
+if pydantic.__version__ <"2.0.0":
+    from pydantic import BaseModel, validator, Field
+else:
+    from pydantic.v1 import BaseModel, validator, Field
 
 
 
@@ -35,16 +42,19 @@ class TestCase(BaseModel):
 
     
 class TestCaseResult(BaseModel):
-        evaluation_method:Optional[str]
-        evaluation_metadata:dict=None
-        test_case:TestCase
-        activity_id:Optional[str]
-        llm_prompt:Optional[LlmPrompt]
-        passed:bool
-        reasoning:Optional[str]
-        score:Optional[float]
-        generated_result:Union[dict,str,None]=None
-        error_description:Optional[str]=None
+    evaluation_method:Optional[str]
+    evaluation_metadata:dict=None
+    test_case:TestCase
+    activity_id:Optional[str]
+    llm_prompt:Optional[LlmPrompt]
+    conversation_session_id:Optional[str] = None
+    response_time_ms:Optional[int]
+    passed:bool
+    order:Optional[int]
+    reasoning:Optional[str]
+    score:Optional[float]
+    generated_result:Union[dict,str,None]=None
+    error_description:Optional[str]=None
 
 
 
@@ -66,15 +76,36 @@ class PromptUnitTestRun(BaseModel):
     end_time:datetime=None
     conditions:Optional["PromptUnitTestConditions"]
     results:PromptUnitTestRunResultsSummary=Field(default_factory= PromptUnitTestRunResultsSummary)
+    
 
     @property
     def duration(self)->timedelta:
         return self.end_time-self.start_time
     
+
+class ConversationTopic(BaseModel):
+    name:str=Field(..., description="Name of the topic")
+    conversation_goal:str=Field(..., description="The goal the persona is trying to achieve during the conversation")
+    opening_line:str
+
+class SimulationPersona(BaseModel):
+    name:str=Field(..., description="Name and title of the persona")
+    role:str = Field(..., description="Role of the persona regarding the use case he/she should be involved in")
+    description:str=Field(..., description="Description of the persona (around 50 words)")
+    conversation_topics:List[ConversationTopic]
+
+
+class ConversationSimulationDefinition(BaseModel):
+    chatbot_description:str
+    personas:List[SimulationPersona]
+
 class PromptUnitTestConditions(BaseModel):
      for_template_name:Optional[str]
      for_tracking_project:Optional[str]
      for_test_cases_in_file:Optional[str]
+     for_simulated_conversations:Optional[str]
+
+
      
 PromptUnitTestRun.update_forward_refs()
 

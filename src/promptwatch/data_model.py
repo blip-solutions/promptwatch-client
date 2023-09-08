@@ -1,7 +1,13 @@
-from pydantic import BaseModel, Field, validator, Extra
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union, Literal, Any
 from uuid import uuid4
+
+import pydantic
+
+if pydantic.__version__ <"2.0.0":
+    from pydantic import BaseModel, Field, validator, Extra
+else:
+    from pydantic.v1 import BaseModel, Field, validator, Extra
 
 def validate_identifier(value, field):
     if value and ' ' in value:
@@ -31,6 +37,11 @@ class Session(BaseModel):
         return value
 
 
+class ActivityFeedback(BaseModel):
+    feedback_label:Optional[int]
+    feedback_rating:Optional[int]
+    feedback_notes:Optional[str]
+    metadata:dict=None
 
 
 class ActivityBase(BaseModel):
@@ -43,6 +54,9 @@ class ActivityBase(BaseModel):
     metadata:Optional[Dict[str,Any]]
     error:Optional[str]=None
     info_message:Optional[str]=None
+    feedback_label:Optional[int]
+    feedback_rating:Optional[int]
+    feedback_notes:Optional[str]
 
     # def __init__(self, *args, **kwargs: Any) -> None:
     #     if len(args)==1 and isinstance(args[0], Session):
@@ -165,6 +179,7 @@ class ChatMessage(BaseModel):
     """ Explicit chat message used as a parameter value for chat history or template"""
     role:Optional[str]
     text:str
+    metadata:Optional[Dict[str,Any]]
 
 class ChatMessagePromptTemplate(PromptTemplateDescription):
     role:Optional[str]

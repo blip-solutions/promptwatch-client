@@ -43,7 +43,7 @@ class LangChainSupport:
             langchain_callback_manager (langchain.callbacks.base.BaseCallbackManager, optional):  If using custom callback manager, pass it here. Otherwise, default callback manager will be used. Defaults to None.
 
         """
-        self.langchain_callback_handler = LangChainCallbackHandler(self.promptwatch_context)
+        self.langchain_callback_handler = LangChainCallbackHandler()
 
         try:
             # this will 
@@ -81,7 +81,7 @@ class LangChainSupport:
     def get_langchain_callback_handler(self):
         if self.langchain_callback_handler  :
             
-            self.langchain_callback_handler = LangChainCallbackHandler(self.promptwatch_context)
+            self.langchain_callback_handler = LangChainCallbackHandler()
             if "langchain_callback_handler"  not in self.promptwatch_context.tracing_handlers:
                 self.promptwatch_context.tracing_handlers["langchain_callback_handler"]=self.langchain_callback_handler
 
@@ -108,12 +108,12 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
 
     def __init__(self, 
-                 prompt_watch:PromptWatch
+                 
 
             ) -> None:
         self.current_llm_chain:Optional[LLMChain]=None
         self.tracing_handlers={}
-        self.prompt_watch_session_id=prompt_watch.session_id
+        
         #we keep these in order to reverse
         self.monkey_patched_functions=[]
         
@@ -124,7 +124,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     def prompt_watch(self) -> PromptWatch:
         """Whether to call verbose callbacks even if verbose is False."""
         
-        prompt_watch_context = ContextTrackerSingleton.get_current(self.prompt_watch_session_id)
+        prompt_watch_context = ContextTrackerSingleton.get_current()
         if not prompt_watch_context:
             raise Exception("PromptWatch context could not be resolved")
         return prompt_watch_context
@@ -319,8 +319,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.try_get_retrieved_documents(inputs)
                   
 
-        
-        question = inputs.get("question") 
+        question = inputs["question"] if inputs.get("question") and len(inputs)==1 and type(inputs["question"])==str else None
         if not question and "chat_history" in inputs:
             #try to get question from inputs
             question = next((v for k,v in inputs.items() if k!="chat_history"),None) if len(inputs)==2 else None
@@ -590,6 +589,9 @@ def find_and_register_templates_recursive(root_chain: Chain, template_name_prefi
 
 def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
         if isinstance(msg, BaseMessage):
+                metadata=None
+                if msg.additional_kwargs:
+                    metadata = msg.additional_kwargs
                 if isinstance(msg,HumanMessage):
                     role="user"
                 elif isinstance(msg,LangChainChatMessage):
@@ -600,9 +602,11 @@ def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
                     role="system"
                 elif msg.type=="function":
                     role="function"
-                return (ChatMessage(role=role,text=msg.content))
+                    metadata=(metadata or {})
+                    metadata["name"]=msg.name
+                return (ChatMessage(role=role,text=msg.content, metadata=metadata))
         elif isinstance(msg, list):
-            return [convert_chat_messages(msg) for msg in msg]
+            return [convert_chat_messages(m) for m in msg]
         else:
             raise ValueError("msg must be either BaseMessage or List[BaseMessage]")
         

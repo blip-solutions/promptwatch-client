@@ -1,6 +1,5 @@
 from typing import *
 
-from pydantic import BaseModel, validator
 from functools import lru_cache
 from math import sqrt
 from abc import ABC, abstractmethod, abstractproperty
