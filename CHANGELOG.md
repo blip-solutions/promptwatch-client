@@ -78,3 +78,6 @@
 - hotfix for breaking changes in pydantic v2+
 - changed context tracking
 - multiple fixes on collecting data from chat models
+
+## Version 0.4.0 (2023-11-25)
+- fix for latest LangChain tracing
