@@ -653,7 +653,7 @@ def create_prompt_template_description( langchain_prompt_template:BasePromptTemp
         
     format=None
     prompt_template=None
-    
+    input_params=None
     if hasattr(langchain_prompt_template,"messages") and  langchain_prompt_template.messages:
         msg_templates = []
         input_params=set()
