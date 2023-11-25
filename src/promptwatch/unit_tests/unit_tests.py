@@ -1,13 +1,13 @@
 import json
 import os
 from typing import *
+
 from promptwatch.constants import EnvVariables
 from promptwatch.promptwatch_context import PromptWatch
-from promptwatch.data_model import NamedPromptTemplateDescription,ActivityBase, LlmPrompt, ChainSequence
+from promptwatch.data_model import ActivityFeedback, ChatMessage, NamedPromptTemplateDescription,ActivityBase, LlmPrompt, ChainSequence
 from .schema import *
 from .evaluation import DEFAULT_COSINE_SCORE_EVALUATION, TestCaseEvaluationWrapper, EvaluationStrategyBase
 import logging
-from abc import ABC,abstractmethod
 from tqdm import tqdm
 from datetime import datetime, timezone
 
@@ -29,11 +29,22 @@ class UnitTest:
         self.test_cases_generator=None
         from promptwatch.client import Client
         self.client=Client(api_key=api_key)
-
         self.evaluator=None
         
+        self.simulation_definition=None
+        self.simulation_type=None
        
-            
+    def for_simulated_conversations(self,  definition:ConversationSimulationDefinition=None, simulation_type:Type=None):
+        """ Initiate the test run for simulated conversation
+        Args:
+            definition (ConversationSimulationDefinition): optional definition, to override the saved one
+        """
+       
+        persona_names = ",".join([p.name for p in definition.personas])
+        self.conditions = PromptUnitTestConditions(for_simulated_conversations=persona_names)
+        self.simulation_definition=definition
+        self.simulation_type= simulation_type or Simulation
+        return self
 
     def for_test_cases(self, examples:List["TestCase"])->"UnitTest":
         self.test_cases_generator = (e for e in examples)
@@ -122,12 +133,12 @@ class UnitTest:
     def __enter__(self):
         
         self._entered=True
-        if not self.test_cases_generator:
-            raise Exception("Invalid use. Please define the scope of test by calling one of for_test_cases, for_test_cases_in_file, for_prompt_template or for_project_sessions methods before entering the context")
+        if not self.test_cases_generator and not self.simulation_definition:
+            raise Exception("Invalid use. Please define the scope of test by calling one of for_test_cases, for_test_cases_in_file, for_prompt_template, for_project_sessions or for_simulated_conversations methods before entering the context")
         
         self.prompt_watch=PromptWatch(tracking_project=self.conditions.for_tracking_project if self.conditions else None, api_key=self.client.api_key)
         self.prompt_watch.__enter__()
-        self.prompt_watch.session_id
+        
         self.unit_test_run = PromptUnitTestRun(
             test_name=self.test_name,
             session_id=self.prompt_watch.current_session.id, 
@@ -139,7 +150,9 @@ class UnitTest:
             unit_test=self, 
             unit_test_run=self.unit_test_run, 
             evaluation_strategy=self.evaluation_strategy, 
-            test_cases_generator=self.test_cases_generator
+            test_cases_generator=self.test_cases_generator,
+            simulation_type=self.simulation_type,
+            simulation_definition=self.simulation_definition
             )
         self._session.__enter__()
         self.prompt_watch.set_session_name(self.test_name)
@@ -151,10 +164,23 @@ class UnitTest:
         self._session.__exit__(exc_type, exc_val, exc_tb)
         pass
     
+class ConversationSimulationAgent(ABC):
+
+    @abstractmethod
+    def next_conversation_topic(self, continue_conversation:bool)->"TestConversationSession":
+        raise NotImplementedError()
+
 
 class UnitTestSession:
 
-    def __init__(self,unit_test:UnitTest, unit_test_run:PromptUnitTestRun,  evaluation_strategy: EvaluationStrategyBase,test_cases_generator:Iterator) -> None:
+    def __init__(self,
+                 unit_test:UnitTest, 
+                 unit_test_run:PromptUnitTestRun,  
+                 evaluation_strategy: EvaluationStrategyBase,
+                 test_cases_generator:Optional[Iterator[TestCase]], 
+                 simulation_type:Type,
+                 simulation_definition:ConversationSimulationDefinition
+                 ) -> None:
         """ Handle for running UnitTestSession """
 
         
@@ -173,10 +199,15 @@ class UnitTestSession:
         
         self.evaluation_strategy=evaluation_strategy
         self._test_cases_generator=test_cases_generator
+        if simulation_type:
+            self._simulation=simulation_type(simulation_definition,self)
+        else:
+            self._simulation=None
         
         #init fields       
         self._pending_test_case:TestCaseEvaluationWrapper=None
         self.outbound_stack=[]
+        self.order_counter=0
         
         
     
@@ -210,6 +241,8 @@ class UnitTestSession:
         return self.langchain_tools
 
     def add_evaluation_result(self, test_case_result:"TestCaseResult"):
+        self.order_counter+=1
+        test_case_result.order=self.order_counter
         if self._pending_test_case is not None and self._pending_test_case.inner_test_case!=test_case_result.test_case:
             raise Exception("Invalid call, you can't set evaluation result for an example while another example is already pending.")
         self.outbound_stack.append(test_case_result)
@@ -230,13 +263,25 @@ class UnitTestSession:
         self._pending_test_case=None
         try:
             self.client.save_unit_test_cases_result(self.test_name, self.unit_test_run.run_id,test_case_results= self.outbound_stack)
+            self.client.save_unit_test_run(self.unit_test_run)
             self.outbound_stack.clear()
         except Exception as e:
             logging.info(f"Failed to send test case result: {e}. Will retry later")
-        
+
+    @property
+    def simulation(self)->"Simulation":
+        return self._simulation
+            
+    
         
     def add_failed_result(self, example:"TestCase", error_description:str):
-        self.add_evaluation_result(TestCaseResult(test_case=example, score=0, error_description=str(error_description), passed=False))
+        self.add_evaluation_result(TestCaseResult(
+                test_case=example, 
+                score=0,
+                conversation_session_id=self.prompt_watch.session_id,
+                error_description=str(error_description), 
+                passed=False
+              ))
            
         
     def test_cases(self)->Iterator["TestCaseEvaluationWrapper"]:
@@ -306,4 +351,221 @@ class UnitTestSession:
         link_url = f"https://www.promptwatch.io/unit-tests?unit-test-run={self.unit_test_run.run_id}"
         print(f"{MAGENTA}You can see the full results here: {link_url}{RESET}")
 
+
+
+
+    
+
+class TestConversationSession:
+    def __init__(self, session:UnitTestSession, simulation:"Simulation", persona:SimulationPersona, topic: ConversationTopic, evaluate_conversation:bool=True) -> None:
+        self.session=session
+        self._simulation=simulation
+        self.conversation_id = None
+        self.persona=persona
+        self.topic=topic
+        self._last_evaluation={}
+        self.conversation = None
         
+        
+    
+    def __enter__(self):
+        self._simulation._start_conversation( self.conversation_id, self.persona, self.topic)
+        self.session.prompt_watch.start_new_session()
+        self.conversation_id = self.session.prompt_watch.session_id
+        session_name=f"Simulated conversation with {self.persona.name}: {self.topic.name}"
+        self.session.prompt_watch.set_session_name(session_name)
+        
+        self._is_active=True
+        return self
+    
+    
+        
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._is_active=False
+        
+        if not exc_val or exc_type == ExitConversationException:
+            conversation_evaluation = self._simulation._evaluate_conversation(self.conversation_id)
+            conversation_evaluation.conversation_session_id=self.session.prompt_watch.session_id
+            self.session.add_evaluation_result(conversation_evaluation)
+            
+        else:
+            test_case = self._simulation._get_test_case(self.conversation_id)
+            logging.exception("Exception during simulated conversation")
+            self.session.add_failed_result(example=test_case, 
+                                       error_description=str(exc_val))
+          
+        self._simulation._end_conversation(self.conversation_id)
+        
+        self.conversation_id=None
+        return True if exc_type!=KeyboardInterrupt else None
+
+
+    @property
+    def is_active(self)->bool:
+        return self._is_active
+    
+    def _test_conversation_id(self):
+        if not self.conversation_id:
+            raise Exception("Invalid call. You haven't entered the conversation yet. Please use `with` statement to enter the conversation")
+
+    def reset_conversation(self):
+        self._test_conversation_id()
+        self._simulation._reset_conversation(self.conversation_id)
+    
+    def evaluate_response(self, answer:str, sources:List[str]=None, reevaluate:bool=False)->ActivityFeedback:
+        self._test_conversation_id()
+        if not reevaluate and self._last_evaluation.get(answer):
+            logging.info(f"Skipping evaluation of response {answer} as it has been already evaluated. Use reevaluate=True to force reevaluation")
+            return self._last_evaluation[answer]
+        evaluation = self._simulation._evaluate_response(self.conversation_id,answer ,sources)
+        self._last_evaluation[answer]=evaluation
+        
+        return evaluation
+
+    
+    def get_next_message(self, response_to_previous:str=None, sources:List[str]=None, evaluate_response:bool=True)->str:
+        self._test_conversation_id()
+        if evaluate_response and response_to_previous:
+            if self._last_evaluation.get(response_to_previous):
+                last_evaluation = self._last_evaluation.get(response_to_previous)
+            else:
+                last_evaluation = self.evaluate_response(response_to_previous, sources)
+            
+        if response_to_previous:
+            
+            self.session.prompt_watch.log_assistant_answer(response_to_previous, 
+                                                            feedback_label=last_evaluation.feedback_label,
+                                                            feedback_rating=last_evaluation.feedback_rating,
+                                                            feedback_notes=last_evaluation.feedback_notes,
+                                                            metadata={"evaluation_metadata":last_evaluation.metadata}
+                                                           )
+        
+        next_msg, is_active = self._simulation._get_next_message(self.conversation_id, response_to_previous)
+        self._is_active=is_active
+        if next_msg:
+            self.session.prompt_watch.log_user_question(next_msg)
+        else:
+            self._is_active=False
+            raise ExitConversationException()
+        
+        return next_msg
+    
+    def change_topic(self, new_topic:Union[ConversationTopic, "PersonaTopicConversationHandle"]):
+        self._test_conversation_id()
+        if isinstance(new_topic, PersonaTopicConversationHandle):
+            if new_topic.persona!=self.persona:
+                logging.warning("Changing topic mismatch: You shouldn't change topic to a topic of different persona")
+            new_topic=new_topic.topic
+        raise NotImplementedError()
+
+class ExitConversationException(Exception):
+    """ Used to quit the conversation """
+    pass
+
+class PersonaTopicConversationHandle:
+    def __init__(self, session:TestConversationSession, simulation, persona:"SimulationPersona", topic:ConversationTopic) -> None:
+        self.session=session
+        self.persona=persona
+        self.simulation=simulation
+        self.topic=topic
+    
+    def start_conversation(self, evaluate_conversation:bool=True)->TestConversationSession:
+        return TestConversationSession(session=self.session, simulation=self.simulation, persona=self.persona, topic=self.topic, evaluate_conversation=evaluate_conversation)
+
+class PersonaHandle:
+    def __init__(self, persona:SimulationPersona, simulation:"Simulation") -> None:
+        self.persona=persona
+        self.simulation=simulation
+
+    def conversation_topics(self)->Iterable[PersonaTopicConversationHandle]:
+        """ topics for all personas"""
+        for topic in self.persona.conversation_topics:
+            yield PersonaTopicConversationHandle(self.simulation.session, self.simulation,  self.persona, topic)
+
+    def get_next_topic(self, previous: PersonaTopicConversationHandle=None):
+        """ get next topic for the persona"""
+        for topic in self.conversation_topics():
+            if previous is None:
+                return topic
+            if topic==previous:
+                previous=None
+
+    def first(self):
+        return self.get_next_topic(None)
+        
+    @property
+    def name(self)->str:
+        return self.persona.name
+    
+    def __repr__(self) -> str:
+        return f"<PersonaHandle {self.name}>"
+
+
+class SimulatedPersonasList:
+    def __init__(self, simulation:"Simulation", personas_definition:List[SimulationPersona]):
+        self.simulation=simulation
+        self.personas_definition=personas_definition
+    
+    def conversation_topics(self,skip:int=0)->Iterable[PersonaTopicConversationHandle]:
+        """ topics for all personas"""
+        i=0
+        for persona in self.personas_definition:
+            for topic in persona.conversation_topics:
+                i+=1
+                if i>skip:
+                    yield PersonaTopicConversationHandle(self.simulation.session, self.simulation,  persona, topic)
+
+    def __getitem__(self, index:Union[str,int]):
+        if isinstance(index, str):
+            return self.get_by_name(index)
+        elif isinstance(index, int):
+            return PersonaHandle(self.personas_definition[index], self.simulation)
+        else:
+            raise TypeError(f"Index type {type(index)} not supported")
+        
+    def get_by_name(self, name:str)->PersonaHandle:
+        for persona in self.personas_definition:
+            if persona.name==name:
+                return PersonaHandle(persona, self.simulation)
+        raise KeyError(f"Persona with name {name} not found")
+
+    def __len__(self):
+        return len(self.personas_definition)
+
+    def __iter__(self)->Iterator[PersonaHandle]:
+        for persona in self.personas_definition:
+            yield PersonaHandle(persona, self.simulation)
+    
+class Simulation:
+
+    def __init__(self, simulation_definition:ConversationSimulationDefinition):
+        self.simulation_definition=simulation_definition
+        self.session = None
+        self._personas_list = SimulatedPersonasList(simulation=self, personas_definition=simulation_definition.personas)
+       
+    @property
+    def personas(self)->SimulatedPersonasList:
+        return self._personas_list
+    
+    def _start_conversation(self,conversation_id:str, persona:SimulationPersona, topic:ConversationTopic)->None:
+        self.session=session
+        #raise NotImplementedError()
+    
+    def _end_conversation(self,conversation_id:str)->None:
+        raise NotImplementedError()
+    
+    def _get_next_message(self,conversation_id:str, response:str)->Tuple[str,bool]:
+        raise NotImplementedError()
+    
+    def _get_test_case(self,conversation_id:str)->TestCase:
+        raise NotImplementedError()
+    
+    def _evaluate_response(self,conversation_id:str, response:str, sources:List[str]=None)->ActivityFeedback:
+        raise NotImplementedError()
+
+    def _evaluate_conversation(self, conversation_id)->TestCaseResult:
+        raise NotImplementedError()
+    
+    def _reset_conversation(self,conversation_id:str)->None:
+        raise NotImplementedError()
