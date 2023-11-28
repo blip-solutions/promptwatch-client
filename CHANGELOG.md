@@ -81,3 +81,6 @@
 
 ## Version 0.4.0 (2023-11-25)
 - fix for latest LangChain tracing
+
+## Version 0.4.1 (2023-11-28)
+- hotfix for latest LangChain tracing

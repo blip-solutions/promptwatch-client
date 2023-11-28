@@ -6,6 +6,7 @@ from abc import ABC
 import types
 from typing import Any, Dict, Optional, Union
 import datetime
+import langchain
 from langchain.prompts.base import BasePromptTemplate
 from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
 from langchain.llms.base import LLM
@@ -47,8 +48,14 @@ class LangChainSupport:
 
         try:
             # this will 
-            #for langchain >0.0.153
-            import langchain.callbacks.manager as langchain_callback_manager_module
+            try:
+                #for langchain >0.0.153
+                import langchain.callbacks.manager as langchain_callback_manager_module
+            except ImportError:
+                #for langchain >0.0.340
+                import langchain.schema.callbacks.manager as langchain_callback_manager_module
+                
+                
             def promptwatch_callback_configure_decorator(func):
                 def configure_with_promptwatch(*args, **kwargs):
                     callback_manager = func(*args, **kwargs)
@@ -60,9 +67,12 @@ class LangChainSupport:
                     return callback_manager
                 configure_with_promptwatch.__original_func = func
                 return configure_with_promptwatch
-            if not hasattr(langchain_callback_manager_module._configure,"__original_func"):
+            
+
+            if hasattr(langchain_callback_manager_module,"_configure") and not hasattr(langchain_callback_manager_module._configure,"__original_func"):
                 decorated_configure = promptwatch_callback_configure_decorator(langchain_callback_manager_module._configure)    
                 setattr(langchain_callback_manager_module, "_configure",  decorated_configure)
+            
         except ImportError:
             
 
