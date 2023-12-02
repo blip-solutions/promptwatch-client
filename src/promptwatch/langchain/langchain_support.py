@@ -1,6 +1,7 @@
 """A Tracer implementation that records to LangChain endpoint."""
 from __future__ import annotations
 from ast import Tuple
+from contextvars import ContextVar
 import re
 from abc import ABC
 import types
@@ -31,6 +32,7 @@ from typing import List, Dict
 from ..promptwatch_context import PromptWatch, ContextTrackerSingleton
 
 
+
 class LangChainSupport:
 
     def __init__(self, promptwatch_context:PromptWatch) -> None:
@@ -45,7 +47,7 @@ class LangChainSupport:
 
         """
         self.langchain_callback_handler = LangChainCallbackHandler()
-
+        promptwatch_tracing_callback_var.set( self.langchain_callback_handler )
         try:
             # this will 
             try:
@@ -72,6 +74,9 @@ class LangChainSupport:
             if hasattr(langchain_callback_manager_module,"_configure") and not hasattr(langchain_callback_manager_module._configure,"__original_func"):
                 decorated_configure = promptwatch_callback_configure_decorator(langchain_callback_manager_module._configure)    
                 setattr(langchain_callback_manager_module, "_configure",  decorated_configure)
+            else:
+                pass
+
             
         except ImportError:
             
@@ -88,9 +93,10 @@ class LangChainSupport:
 
         return self
 
+
+
     def get_langchain_callback_handler(self):
         if self.langchain_callback_handler  :
-            
             self.langchain_callback_handler = LangChainCallbackHandler()
             if "langchain_callback_handler"  not in self.promptwatch_context.tracing_handlers:
                 self.promptwatch_context.tracing_handlers["langchain_callback_handler"]=self.langchain_callback_handler
@@ -449,9 +455,16 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
         
     
-
-        
-
+promptwatch_tracing_callback_var: ContextVar[Optional[LangChainCallbackHandler]] = ContextVar(  # noqa: E501
+    "promptwatch_tracing_callback", default=None
+)
+try:
+    import langchain.schema.callbacks.manager as langchain_callback_manager_module
+    if hasattr(langchain_callback_manager_module,"register_configure_hook"):
+        langchain_callback_manager_module.register_configure_hook(promptwatch_tracing_callback_var, True)
+except ImportError:
+    # older langchain versions
+    pass 
 
 
 def register_prompt_template(template_name:str,prompt_template, version:Optional[str]="1.0"):

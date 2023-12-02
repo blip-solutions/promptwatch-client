@@ -188,6 +188,7 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
             #raise Exception("PromptWatch: LangChain callback handler is not set. Please call langchain_tracing() before entering the context.")
 
         if not self.current_session:
+            
             self.start_session()
         
         
