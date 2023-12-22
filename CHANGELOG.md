@@ -87,3 +87,6 @@
 
 ## Version 0.4.2 (2023-12-2)
 - yet another fix of hooking on new LangChain tracing
+
+## Version 0.4.3 (2023-12-21)
+- fix to match latest OpenAI and LangChain packages changes

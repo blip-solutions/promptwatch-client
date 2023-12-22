@@ -189,14 +189,14 @@ class OpenAIEmbeddingProviderBase(EmbeddingProviderBase):
         self._token_limit = token_limit
         self.model_name = model_name
         try: 
-            import openai
-                
+            from openai import OpenAI
+            client = OpenAI()
        
-            def embed(prompt:str)->List[float]:
+            def embed(prompt:str, openAI_client=client)->List[float]:
                 # replace newlines, which can negatively affect performance.
                 prompt = prompt.replace("\n", " ")
                 engine=model_name
-                return openai.Embedding.create(input=[prompt], engine=engine)
+                return openAI_client.embeddings.create(input=[prompt], model=model_name)
             
             self.create_embeddings = embed
 
@@ -215,9 +215,9 @@ class OpenAIEmbeddingProviderBase(EmbeddingProviderBase):
     def __call__(self, prompt: str, include_token_usage: bool = False) :
         res = self.create_embeddings(prompt)
         if include_token_usage:
-            return res["data"][0]["embedding"], res["usage"]["total_tokens"]
+            return res.data[0].embedding, res.usage.total_tokens
         else:
-            res["data"][0]["embedding"]
+            res.data[0].embedding
 
 
 class PromptWatchCacheManager:

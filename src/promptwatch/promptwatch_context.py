@@ -503,13 +503,13 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
   
 
     def finish_session(self):
-        
-        self.current_session.end_time=datetime.datetime.now(tz=datetime.timezone.utc)
-        self._flush_stack()
-        if self.current_session.steps_count:
-            self.client.finish_session(self.current_session)
-        
-        self.current_session=None
+        if self.current_session:
+            self.current_session.end_time=datetime.datetime.now(tz=datetime.timezone.utc)
+            self._flush_stack()
+            if self.current_session.steps_count:
+                self.client.finish_session(self.current_session)
+            
+            self.current_session=None
 
     def _on_error(self, error, kwargs):
         if self.current_activity:

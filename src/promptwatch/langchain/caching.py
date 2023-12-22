@@ -22,7 +22,7 @@ from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, 
 from ..client import Client
 
 
-from langchain.cache import BaseCache
+from langchain_core.caches import BaseCache
 
 
 
