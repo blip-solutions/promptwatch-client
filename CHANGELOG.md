@@ -90,3 +90,6 @@
 
 ## Version 0.4.3 (2023-12-21)
 - fix to match latest OpenAI and LangChain packages changes
+- 
+## Version 0.4.4 (2024-02-12)
+- fix to match latest LangChain changes

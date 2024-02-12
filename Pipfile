@@ -7,13 +7,15 @@ name = "pypi"
 promptwatch = {editable = true, path = "."}
 tiktoken = "*"
 chromadb = "==0.3.15"
-langchain = "*"
 openai = "*"
+langchain-community = "*"
+langchain = "*"
 
 [dev-packages]
 ipykernel = "*"
 persistqueue = "*"
 autopep8 = "*"
+langchain-openai = "*"
 
 [requires]
 python_version = "3.9"

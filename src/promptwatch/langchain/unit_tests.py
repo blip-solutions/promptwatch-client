@@ -1,6 +1,6 @@
 from typing import Callable, Union,List
 from promptwatch.unit_tests.schema import Callable, Union
-from langchain import  LLMChain
+from langchain.chains import  LLMChain
 from promptwatch.data_model import ChatMessage
 from .langchain_support import reconstruct_langchain_chat_messages
 from typing import Dict, Any
