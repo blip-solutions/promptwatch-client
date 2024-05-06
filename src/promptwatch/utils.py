@@ -2,6 +2,8 @@ import datetime
 from decimal import Decimal
 import inspect
 import types
+
+from pydantic import BaseModel
 def find_the_caller_in_the_stack(name:str=None, type:type = None):
         caller_frame = inspect.currentframe().f_back
         while caller_frame:
@@ -30,8 +32,10 @@ def copy_dict_serializable_values(dict_value):
             elif isinstance(value, datetime.datetime):
                 res[key] = value.isoformat()
         return res
+    if isinstance(dict_value, BaseModel):
+        return dict_value.model_dump() if hasattr(dict_value, "model_dump") else dict_value.dict()
     else:
-        raise ValueError(f"Expected dict. Got: {dict_value}")
+        return {}
 
 def copy_list_serializable_values(list_value):
     if isinstance(list_value, list):

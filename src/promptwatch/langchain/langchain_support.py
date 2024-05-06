@@ -1,36 +1,49 @@
 """A Tracer implementation that records to LangChain endpoint."""
 from __future__ import annotations
+
+import datetime
+import re
+import types
+from abc import ABC
 from ast import Tuple
 from contextvars import ContextVar
-import re
-from abc import ABC
-import types
-from typing import Any, Dict, Optional, Union
-import datetime
+from typing import Any, Dict, List, Optional, Union
+
 import langchain
-from langchain.prompts.base import BasePromptTemplate
-from langchain.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, AIMessagePromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder, BaseMessagePromptTemplate
-from langchain.llms.base import LLM
-from langchain.chat_models.base import BaseChatModel
-from langchain.chains import LLMChain
-from langchain.embeddings.base import Embeddings
-from langchain.schema import HumanMessage, ChatMessage as LangChainChatMessage, AIMessage, SystemMessage, BaseMessage 
-from langchain.prompts import ChatMessagePromptTemplate as LangChainChatMessagePromptTemplate
+from langchain.agents import Agent, BaseSingleActionAgent, Tool
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.agents import Tool, Agent, BaseSingleActionAgent
-from langchain.tools.base import BaseTool
+from langchain.chains import LLMChain
 from langchain.chains.base import Chain
+from langchain.chat_models.base import BaseChatModel
+from langchain.embeddings.base import Embeddings
+from langchain.llms.base import LLM
+from langchain.prompts import \
+    ChatMessagePromptTemplate as LangChainChatMessagePromptTemplate
+from langchain.prompts.base import BasePromptTemplate
+from langchain.prompts.chat import (AIMessagePromptTemplate,
+                                    BaseMessagePromptTemplate,
+                                    ChatPromptTemplate,
+                                    HumanMessagePromptTemplate,
+                                    MessagesPlaceholder,
+                                    SystemMessagePromptTemplate)
+from langchain.schema import AgentAction, AgentFinish, AIMessage, BaseMessage
+from langchain.schema import ChatMessage as LangChainChatMessage
+from langchain.schema import Document, HumanMessage, LLMResult, SystemMessage
+from langchain.tools.base import BaseTool
+from openai import BaseModel
 
-from langchain.schema import AgentAction, AgentFinish, LLMResult,  Document
 from ..client import Client
-from ..data_model import NamedPromptTemplateDescription,PromptTemplateDescription, LlmPrompt, ParallelPrompt, ChainSequence, ChatMessage, Answer, Action, Question, RetrievedDocuments, DocumentSnippet, ChatMessagePromptTemplate
-from ..utils import find_the_caller_in_the_stack, wrap_a_method, copy_dict_serializable_values
-from .caching import CachedLLM, CachedChatLLM
-from ..decorators import FORMATTED_PROMPT_CONTEXT_KEY, TEMPLATE_NAME_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY
-
-from typing import List, Dict
-from ..promptwatch_context import PromptWatch, ContextTrackerSingleton
-
+from ..data_model import (Action, Answer, ChainSequence, ChatMessage,
+                          ChatMessagePromptTemplate, DocumentSnippet,
+                          LlmPrompt, NamedPromptTemplateDescription,
+                          ParallelPrompt, PromptTemplateDescription, Question,
+                          RetrievedDocuments)
+from ..decorators import (FORMATTED_PROMPT_CONTEXT_KEY, LLM_CHAIN_CONTEXT_KEY,
+                          TEMPLATE_NAME_CONTEXT_KEY)
+from ..promptwatch_context import ContextTrackerSingleton, PromptWatch
+from ..utils import (copy_dict_serializable_values,
+                     find_the_caller_in_the_stack, wrap_a_method)
+from .caching import CachedChatLLM, CachedLLM
 
 
 class LangChainSupport:
@@ -117,7 +130,6 @@ class LangChainSupport:
     #     prompt_cache = PromptWatchLlmCache(None, embeddings, token_limit, similarity_limit)
     #     langchain.llm_cache=prompt_cache
 
-   
 
 class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     """An implementation of the PromptWatch handler that tracks langchain tracing events"""
@@ -144,7 +156,9 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         if not prompt_watch_context:
             raise Exception("PromptWatch context could not be resolved")
         return prompt_watch_context
-
+    @property
+    def is_in_promptwatch_context(self) -> bool:
+        return bool(ContextTrackerSingleton.get_current())
 
     @property
     def always_verbose(self) -> bool:
@@ -168,6 +182,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         parent_run_id = None,
         **kwargs: Any,
     ) -> Any:
+        if not self.is_in_promptwatch_context:
+            return
         self.on_llm_start(serialized, messages, run_id=run_id, parent_run_id=parent_run_id, **kwargs)
     
 
@@ -175,7 +191,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self, serialized: Dict[str, Any], prompts: List[str, List[BaseMessage]], **kwargs: Any
     ) -> Any:
         """Run when LLM starts running."""
-
+        if not self.is_in_promptwatch_context:
+            return
         prompt_template = None
         prompt_input_values=None
         llm_info=None
@@ -207,7 +224,11 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
                 # lets create anonymous prompt template description
                 prompt_template = create_prompt_template_description(current_llm_chain.prompt)
 
-            prompt_input_values = self.prompt_watch.current_activity.inputs
+            prompt_input_values = {}
+            for chain in self.prompt_watch.chain_hierarchy:
+                if chain.inputs:
+                    prompt_input_values.update(chain.inputs)
+            
 
             formatted_prompt = self.prompt_watch.get_context(FORMATTED_PROMPT_CONTEXT_KEY)
 
@@ -283,6 +304,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> Any:
         """Run when LLM ends running."""
+        if not self.is_in_promptwatch_context:
+            return
         if len(response.generations)>1:
             prompts =  self.prompt_watch.current_activity.prompts
         else:
@@ -319,6 +342,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when LLM errors."""
+        if not self.is_in_promptwatch_context:
+            return
         self.prompt_watch._on_error(error, kwargs)
 
     
@@ -326,7 +351,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self, serialized: Dict[str, Any], inputs: Dict[str, Any], **kwargs: Any
     ) -> Any:
         """Run when chain starts running."""
-        
+        if not self.is_in_promptwatch_context:
+            return
         chain_name = serialized.get("name") or  serialized.get("id",[None])[-1]
         if "LLM" in chain_name :
             current_llm_chain = find_the_caller_in_the_stack(chain_name)
@@ -335,7 +361,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self.try_get_retrieved_documents(inputs)
                   
 
-        question = inputs["question"] if inputs.get("question") and len(inputs)==1 and type(inputs["question"])==str else None
+        question = inputs["question"] if  isinstance(inputs,dict) and inputs.get("question") and len(inputs)==1 and type(inputs["question"])==str else None
         if not question and "chat_history" in inputs:
             #try to get question from inputs
             question = next((v for k,v in inputs.items() if k!="chat_history"),None) if len(inputs)==2 else None
@@ -350,7 +376,7 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         
         
         current_chain=ChainSequence(
-                inputs=serialize_chain_inputs(inputs),
+                inputs=serialize_chain_inputs(inputs) if isinstance(inputs,(dict,BaseModel)) else {} ,
                 metadata={},
                 sequence_type=serialized.get("name") or "others"
             )
@@ -364,6 +390,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
 
         
     def try_get_retrieved_documents(self, inputs:dict):
+        if not isinstance(inputs,dict):
+            return
         retrieved_documents = next((val for key,val in inputs.items() if isinstance(val,list) and val and isinstance(val[0], Document)),None)
         if retrieved_documents:
             docs=[]
@@ -380,7 +408,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> Any:
         """Run when chain ends running."""
         
-        
+        if not self.is_in_promptwatch_context:
+            return
         self.prompt_watch._remove_context(LLM_CHAIN_CONTEXT_KEY)
         outputs = copy_dict_serializable_values(outputs)
         self.prompt_watch.current_activity.outputs=outputs
@@ -410,6 +439,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self, serialized: Dict[str, Any], input_str: str, **kwargs: Any
     ) -> Any:
         """Run when tool starts running."""
+        if not self.is_in_promptwatch_context:
+            return
         self.prompt_watch._open_activity(
                 Action(tool_type=serialized.get("name") or "undefined", input=input_str, input_data=kwargs)
             )
@@ -417,6 +448,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_tool_end(self, output: str, **kwargs: Any) -> Any:
         """Run when tool ends running."""
+        if not self.is_in_promptwatch_context:
+            return
         self.prompt_watch.current_activity.output=output
         self.prompt_watch.current_activity.output_data=kwargs
         self.prompt_watch._close_current_activity()
@@ -430,6 +463,8 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
         self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
     ) -> Any:
         """Run when tool errors."""
+        if not self.is_in_promptwatch_context:
+            return
         self.prompt_watch._on_error(error, kwargs)
 
     
@@ -447,14 +482,14 @@ class LangChainCallbackHandler(BaseCallbackHandler, ABC):
     
     def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> Any:
         """Run on agent end."""
+        
         answer_text = finish[0].get("output")
         answer_activity = Answer(text=answer_text)
         self.prompt_watch._add_activity(answer_activity, as_root=True)
         if finish.return_values:
             answer_activity.metadata["outputs"]:finish.return_values
-        
-        
-    
+
+
 promptwatch_tracing_callback_var: ContextVar[Optional[LangChainCallbackHandler]] = ContextVar(  # noqa: E501
     "promptwatch_tracing_callback", default=None
 )
@@ -520,10 +555,6 @@ def register_prompt_template(template_name:str,prompt_template, version:Optional
         return prompt_template
 
 
-
-
-
-
 def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name_prefix:str, print_code=True, _ignore_chains:List[Chain]=[])-> Tuple[str,BasePromptTemplate]:
     """This will find all templates in the chain and its subchains, agents, tools recursively. 
     It return a tuple of (path_to_template, template)
@@ -582,8 +613,7 @@ def find_templates_recursive(root_chain: Union[Chain,Tool, Agent], template_name
             if print_code:
                 print(f"register_prompt_template({template_name_prefix}.{field_key}, '{template_name_prefix}.{field_key}'")
             yield f"{template_name_prefix}.{field_key}", field_value
-        
-            
+
 
 def find_and_register_templates_recursive(root_chain: Chain, template_name_prefix:str, ignore_subpaths=[]):
     paths = []
@@ -600,14 +630,6 @@ def find_and_register_templates_recursive(root_chain: Chain, template_name_prefi
     print("\n".join(paths))
     print("WARNING: This method is not fit for production use as it might slow down the startup time.")
     print("         Please consider using find_and_register_templates_recursive() to generate a code to register all templates instead.")
-
-
-
-
-
-
-
-
 
 
 def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
@@ -632,7 +654,7 @@ def convert_chat_messages( msg:Union[BaseMessage, List[BaseMessage]]):
             return [convert_chat_messages(m) for m in msg]
         else:
             raise ValueError("msg must be either BaseMessage or List[BaseMessage]")
-        
+
 def reconstruct_langchain_chat_messages( msg:Union[ChatMessage, List[ChatMessage]]):
         if isinstance(msg, ChatMessage):
                 if msg.role=="user":
@@ -650,9 +672,11 @@ def reconstruct_langchain_chat_messages( msg:Union[ChatMessage, List[ChatMessage
             return [reconstruct_langchain_chat_messages(msg) for msg in msg]
         else:
             raise ValueError("msg must be either ChatMessage or List[ChatMessage]")
-        
-def serialize_chain_inputs(inputs:dict):
+
+def serialize_chain_inputs(inputs:Union[dict, BaseModel]):
     res = {}
+    if isinstance(inputs,BaseModel):
+        return inputs.model_dump() if hasattr(inputs, "model_dump") else inputs.dict()
     for k,v in inputs.items():
         if isinstance(v, BaseMessage):
             res[k]=convert_chat_messages(v)
@@ -729,4 +753,3 @@ def create_prompt_template_description( langchain_prompt_template:BasePromptTemp
             return NamedPromptTemplateDescription(prompt_template=prompt_template, prompt_input_params=input_params, format=format, template_name=template_name ,template_version=template_version)
         else:
             return PromptTemplateDescription(prompt_template=prompt_template, prompt_input_params=input_params, format=format)
-
