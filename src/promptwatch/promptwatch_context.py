@@ -15,7 +15,7 @@ from abc import ABCMeta
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
-from .caching import PromptWatchCacheManager
+
 from .constants import EnvVariables
 from .data_model import (
     Action,
@@ -172,7 +172,7 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
         self.pending_stack: List[ActivityBase] = []
 
         self.current_session = None
-        self._cache_manager = PromptWatchCacheManager(self)
+
         self.tracing_handlers = {}
         self.session_entered = False
 
@@ -194,14 +194,6 @@ class PromptWatch(metaclass=ContextTrackerSingleton):
     #         current_chain_hierarchy=[]
     #         self.chain_hierarchy_context.set(current_chain_hierarchy)
     #     return current_chain_hierarchy
-
-    @property
-    def caching(self):
-        return self._cache_manager
-
-    @property
-    def caching(self):
-        return self._cache_manager
 
     @property
     def langchain(self):

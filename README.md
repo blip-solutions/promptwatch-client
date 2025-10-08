@@ -1,3 +1,7 @@
+NOTE: 
+PromptWatch.io has been discontinued
+
+
 # PromptWatch.io ... session tracking for LangChain 
 
 It enables you to:
